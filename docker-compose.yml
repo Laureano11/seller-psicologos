@@ -1,0 +1,59 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: seller
+      POSTGRES_PASSWORD: seller
+      POSTGRES_DB: seller
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seller -d seller"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    build: .
+    command: ["npx", "tsx", "src/worker.ts"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: America/Argentina/Buenos_Aires
+      DATABASE_URL: postgres://seller:seller@db:5432/seller
+    volumes:
+      - wa_auth:/app/wa_auth
+      - ./content:/app/content
+    depends_on:
+      db:
+        condition: service_healthy
+
+  hub:
+    build: .
+    command: ["npx", "tsx", "src/hub/server.ts"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: America/Argentina/Buenos_Aires
+      DATABASE_URL: postgres://seller:seller@db:5432/seller
+      PORT: "3000"
+    volumes:
+      - ./content:/app/content
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  cloudflared:
+    image: cloudflare/cloudflared
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - hub
+
+volumes:
+  pgdata:
+  wa_auth:
