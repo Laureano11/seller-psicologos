@@ -24,6 +24,7 @@ services:
       DATABASE_URL: postgres://seller:seller@db:5432/seller
     volumes:
       - wa_auth:/app/wa_auth
+      - ./data:/app/data:ro
       - ./content:/app/content
     depends_on:
       db:
@@ -41,7 +42,7 @@ services:
     volumes:
       - ./content:/app/content
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       db:
         condition: service_healthy

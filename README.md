@@ -24,14 +24,13 @@ Editá `apertura.md`, `estilo.md`, `manual-ventas.md` y `producto-crm.md` con tu
 En Google Cloud Console habilitá "Places API" y creá una API key -> `GOOGLE_PLACES_KEY`.
 
 ### 4) Google OAuth (Calendar y Gmail)
+Primero creá tu `.env`: `cp .env.example .env`.
+
 1. En Google Cloud creá un "ID de cliente OAuth" de tipo aplicación web, con redirect URI `http://localhost:5555/callback`. Habilitá Calendar API y Gmail API.
 2. Poné `GOOGLE_CLIENT_ID` y `GOOGLE_CLIENT_SECRET` en `.env`.
 3. Corré `npm install && npm run google:auth`, abrí la URL que imprime, autorizá y copiá el `GOOGLE_REFRESH_TOKEN` que aparece en la terminal.
 
-### 5) Configurar `.env`
-```
-cp .env.example .env
-```
+### 5) Completar `.env`
 Completá con valores reales antes de levantar nada:
 - `OWNER_WA_ID`: tu número real en formato internacional sin `+` (ej. `5491155551234`). Ahí llegan los avisos.
 - `HUB_PASSWORD`: una contraseña fuerte (el valor de ejemplo `cambiame` no sirve).
@@ -56,15 +55,18 @@ docker compose --profile tunnel up -d
 Como el hub queda expuesto a internet, la contraseña fuerte es obligatoria.
 
 ### 9) Pasar a modelos pagos
-Editá `LLM_BUSCADOR`, `LLM_VENDEDOR` y `LLM_ANALISTA` en `.env`: lista `proveedor:modelo` separada por comas, en orden de fallback (ej. `anthropic:claude-sonnet-4-5,google:gemini-2.5-flash`). Cargá la key del proveedor (`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_BASE_URL`) y reiniciá: `docker compose up -d`.
+Editá `LLM_BUSCADOR`, `LLM_VENDEDOR` y `LLM_ANALISTA` en `.env`: lista `proveedor:modelo` separada por comas, en orden de fallback (ej. `anthropic:claude-sonnet-4-5,google:gemini-2.5-flash`). Cargá la key del proveedor (`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_BASE_URL`) y reiniciá: `docker compose up -d`. Si usás Ollama en tu máquina, `localhost` no funciona dentro del contenedor: poné `OLLAMA_BASE_URL=http://host.docker.internal:11434/v1`.
 
 ### 10) Trámites
-- Registro "No Llame" (AAIP): inscribite/descargá el listado y usalo con `DNC_MODE=file` y `DNC_FILE`.
+- Registro "No Llame" (AAIP): inscribite/descargá el listado y guardalo como `data/no_llame.csv` (la carpeta `data/` se monta en solo lectura en el worker como `/app/data`) y usá `DNC_MODE=file` con `DNC_FILE=/app/data/no_llame.csv`.
 - Registro de la base de datos personales ante la AAIP según la Ley 25.326, ya que guardás datos de contactos.
 
 ### 11) Riesgos asumidos
 - Usar un WhatsApp personal para mensajes automatizados puede terminar en el bloqueo (ban) del número. Por eso el sistema limita a 5 contactos nuevos por día y los espacia. Preferí un número que puedas perder.
 - Los proveedores de IA gratuitos (Gemini, Groq) pueden usar los datos enviados para entrenar sus modelos. Los mensajes y datos de los prospectos pasan por ellos.
+
+## Backups
+La sesión de WhatsApp (volumen `wa_auth`) y la base (volumen `pgdata`) viven en volúmenes de Docker. Resguardalos periódicamente, por ejemplo `docker compose exec db pg_dump -U seller seller > backup.sql` y copiando el volumen `wa_auth` con un contenedor temporal (`tar`). Si perdés `wa_auth` hay que volver a escanear el QR.
 
 ## Comandos útiles
 ```
