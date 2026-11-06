@@ -97,7 +97,39 @@ describe('WaGateway.handleIncoming', () => {
   });
 });
 
+describe('dedupe de reentregas', () => {
+  it('mismo mensaje entrante dos veces -> segundo null, una sola fila', async () => {
+    const p = await prospect();
+    expect(await gw.handleIncoming(msg())).toEqual({ prospectId: p.id, triggerAgent: true });
+    expect(await gw.handleIncoming(msg())).toBeNull();
+    expect(await count()).toBe(1);
+  });
+
+  it('mismo fromMe dos veces -> una sola fila de lauri', async () => {
+    const p = await prospect();
+    expect(await gw.handleIncoming(msg({ fromMe: true, id: 'm-1' }))).not.toBeNull();
+    expect(await gw.handleIncoming(msg({ fromMe: true, id: 'm-1' }))).toBeNull();
+    expect((await repo.listMessages(db, p.id)).filter((x) => x.author === 'lauri')).toHaveLength(1);
+  });
+});
+
 describe('WaGateway.flushOutbox', () => {
+  it('falla el registro post-envío -> no se marca fallido', async () => {
+    const p = await prospect();
+    const flaky: Db = {
+      ...db,
+      query: (sql: string, params?: unknown[]) =>
+        sql.includes('INSERT INTO messages') ? Promise.reject(new Error('db caída')) : db.query(sql, params),
+    } as Db;
+    const gw2 = new WaGateway(flaky, tr, config);
+    const oid = await gw2.enqueueToProspect(p.id, 'hola');
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(await gw2.flushOutbox(WEEKDAY)).toBe(1);
+    err.mockRestore();
+    const row = (await db.query<{ status: string }>('SELECT status FROM outbox WHERE id=$1', [oid]))[0];
+    expect(row.status).toBe('enviado');
+  });
+
   it('no envía a prospecto en baja', async () => {
     const p = await prospect('baja');
     await gw.enqueueToProspect(p.id, 'hola');

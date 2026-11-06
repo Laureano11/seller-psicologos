@@ -396,3 +396,8 @@ export async function isSystemWaMessageId(db: Db, waMessageId: string): Promise<
   );
   return r.length > 0;
 }
+
+/** ¿Ya hay un mensaje guardado con este id de WhatsApp? (dedupe de reentregas) */
+export async function messageExistsByWaId(db: Db, waMessageId: string): Promise<boolean> {
+  return (await db.query('SELECT 1 FROM messages WHERE wa_message_id=$1 LIMIT 1', [waMessageId])).length > 0;
+}

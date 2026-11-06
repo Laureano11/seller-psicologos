@@ -2,7 +2,7 @@ import type { Db } from '../db/db.js';
 import type { Config } from '../config.js';
 import {
   BLOCKED_STATUSES, addMessage, dueOutbox, enqueueOutbox, getProspect, getProspectByWaId,
-  isOptedOut, isSystemWaMessageId, markOutboxFailed, markOutboxSent, updateProspect,
+  isOptedOut, isSystemWaMessageId, messageExistsByWaId, markOutboxFailed, markOutboxSent, updateProspect,
 } from '../db/repo.js';
 import { isInWindow } from '../time.js';
 import type { IncomingMsg, WaTransport } from './transport.js';
@@ -19,6 +19,7 @@ export class WaGateway {
     if (m.fromWaId === this.config.ownerWaId) return null;
     const p = await getProspectByWaId(this.db, m.fromWaId);
     if (!p) return null;
+    if (await messageExistsByWaId(this.db, m.id)) return null; // reentrega de Baileys
 
     if (m.fromMe) {
       const pending = this.inflight.get(m.fromWaId);
@@ -73,16 +74,23 @@ export class WaGateway {
         return id;
       });
       this.track(item.toWaId, op);
+      let waMessageId: string;
       try {
-        const waMessageId = await op;
+        waMessageId = await op;
+      } catch (e) {
+        await markOutboxFailed(this.db, item.id, e instanceof Error ? e.message : String(e));
+        continue;
+      }
+      sent++;
+      // El envío ya ocurrió: si falla el registro, nunca marcar el item como fallido.
+      try {
         await markOutboxSent(this.db, item.id, waMessageId);
         if (prospectId != null) {
           await addMessage(this.db, { prospectId, direction: 'out', author: 'agent', body: item.body, waMessageId });
           await updateProspect(this.db, prospectId, { lastOutboundAt: now });
         }
-        sent++;
       } catch (e) {
-        await markOutboxFailed(this.db, item.id, e instanceof Error ? e.message : String(e));
+        console.error(`Outbox ${item.id}: enviado (${waMessageId}) pero falló el registro`, e);
       }
     }
     return sent;
