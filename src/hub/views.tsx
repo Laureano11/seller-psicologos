@@ -66,6 +66,7 @@ export function Layout(p: { title?: string; refresh?: boolean; banners?: string[
         <nav>
           <a href="/">Prospectos</a>
           <a href="/mejoras">Mejoras</a>
+          <a href="/pipeline">Pipeline</a>
           <a href="/sistema">Sistema</a>
         </nav>
         {p.error ? <div class="banner error">{p.error}</div> : null}

@@ -457,3 +457,38 @@ export async function countOptOutsSince(db: Db, since: Date): Promise<number> {
   const r = await db.query<{ n: number }>('SELECT count(*)::int AS n FROM opt_outs WHERE created_at >= $1', [since]);
   return r[0].n;
 }
+
+// ---------- pipeline (solo lectura) ----------
+
+export async function countProspectsByStatus(db: Db): Promise<Record<string, number>> {
+  const r = await db.query<{ status: string; n: number }>('SELECT status, count(*)::int AS n FROM prospects GROUP BY status');
+  return Object.fromEntries(r.map((x) => [x.status, x.n]));
+}
+
+export async function countOutboxByStatus(db: Db, sentSince: Date): Promise<{ pendiente: number; enviadoHoy: number; bloqueado: number; fallido: number }> {
+  const r = await db.query<{ pendiente: number; enviado_hoy: number; bloqueado: number; fallido: number }>(
+    `SELECT count(*) FILTER (WHERE status='pendiente')::int AS pendiente,
+            count(*) FILTER (WHERE status='enviado' AND sent_at >= $1)::int AS enviado_hoy,
+            count(*) FILTER (WHERE status='fallido' AND error='bloqueado')::int AS bloqueado,
+            count(*) FILTER (WHERE status='fallido' AND error IS DISTINCT FROM 'bloqueado')::int AS fallido
+     FROM outbox`,
+    [sentSince],
+  );
+  return { pendiente: r[0].pendiente, enviadoHoy: r[0].enviado_hoy, bloqueado: r[0].bloqueado, fallido: r[0].fallido };
+}
+
+/** Últimos mensajes de todos los prospectos; `outboxStatus` solo si el saliente se asocia por wa_message_id (los enviados). */
+export async function listRecentMessages(db: Db, limit: number): Promise<(Message & { prospectName: string; outboxStatus: string | null })[]> {
+  return mapRows(await db.query(
+    `SELECT m.*, p.name AS prospect_name, o.status AS outbox_status
+     FROM messages m
+     JOIN prospects p ON p.id = m.prospect_id
+     LEFT JOIN outbox o ON m.direction='out' AND m.wa_message_id IS NOT NULL AND o.wa_message_id = m.wa_message_id
+     ORDER BY m.id DESC LIMIT $1`,
+    [limit],
+  ));
+}
+
+export async function listPendingOutbox(db: Db, limit: number): Promise<OutboxItem[]> {
+  return mapRows(await db.query("SELECT * FROM outbox WHERE status='pendiente' ORDER BY send_after, id LIMIT $1", [limit]));
+}

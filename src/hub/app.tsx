@@ -10,6 +10,7 @@ import {
 } from '../db/repo.js';
 import { compareVariants, variantStats } from '../learning/stats.js';
 import { approveProposal, rejectProposal } from '../learning/proposals.js';
+import { PipelinePage, loadPipelineData } from './pipeline.js';
 import { Layout, MetricsBar, ProposalsView, ProspectDetail, ProspectList, SystemView, computeMetrics } from './views.js';
 
 export interface HubDeps {
@@ -142,6 +143,11 @@ export function createHubApp(deps: HubDeps) {
         <SystemView waState={wa?.state ?? 'sin estado'} qrDataUrl={qrDataUrl} events={await listEvents(db, 50)} meetings={meetings} names={names} fmt={fmt} />
       </Layout>,
     );
+  });
+
+  app.get('/pipeline', async (c) => {
+    const d = await loadPipelineData(db, config, new Date());
+    return c.html(<PipelinePage d={d} config={config} fmt={fmt} banners={await banners()} />);
   });
 
   return app;
