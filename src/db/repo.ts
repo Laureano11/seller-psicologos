@@ -381,6 +381,6 @@ export async function seedKnowledge(db: Db, contentDir: string): Promise<void> {
     }
   }
   if ((await listVariants(db, 'activa')).length === 0) {
-    await addVariant(db, readFileSync(join(contentDir, 'apertura.md'), 'utf8'), 'activa');
+    await addVariant(db, readFileSync(join(contentDir, 'apertura.md'), 'utf8').replace(/<!--[\s\S]*?-->/g, '').trim(), 'activa');
   }
 }

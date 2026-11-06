@@ -169,7 +169,7 @@ describe('repo', () => {
     writeFileSync(join(dir, 'manual-ventas.md'), 'ventas');
     writeFileSync(join(dir, 'producto-crm.md'), 'producto');
     writeFileSync(join(dir, 'estilo.md'), 'estilo');
-    writeFileSync(join(dir, 'apertura.md'), 'Hola, soy Lauri');
+    writeFileSync(join(dir, 'apertura.md'), 'Hola, soy Lauri\n<!-- nota para Lauri -->\n');
     await seedKnowledge(db, dir);
     await seedKnowledge(db, dir);
     expect(await repo.getActiveManual(db, 'ventas')).toBe('ventas');
@@ -178,6 +178,6 @@ describe('repo', () => {
     expect(await repo.listManualVersions(db, 'ventas')).toHaveLength(1);
     const vs = await repo.listVariants(db, 'activa');
     expect(vs).toHaveLength(1);
-    expect(vs[0].template).toBe('Hola, soy Lauri');
+    expect(vs[0].template).toBe('Hola, soy Lauri\n<!-- nota para Lauri -->\n');
   });
 });
