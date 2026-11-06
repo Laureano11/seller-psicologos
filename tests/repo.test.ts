@@ -178,6 +178,6 @@ describe('repo', () => {
     expect(await repo.listManualVersions(db, 'ventas')).toHaveLength(1);
     const vs = await repo.listVariants(db, 'activa');
     expect(vs).toHaveLength(1);
-    expect(vs[0].template).toBe('Hola, soy Lauri\n<!-- nota para Lauri -->\n');
+    expect(vs[0].template).toBe('Hola, soy Lauri');
   });
 });
