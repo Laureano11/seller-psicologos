@@ -73,7 +73,13 @@ export function createLlm(config: Config, opts: { modelFactory?: (spec: string) 
       } catch (e) {
         const error = errMsg(e);
         attempts.push({ spec, error });
-        if (opts.db) await logEvent(opts.db, 'llm_error', { agent, spec, error });
+        if (opts.db) {
+          try {
+            await logEvent(opts.db, 'llm_error', { agent, spec, error });
+          } catch (logErr) {
+            console.error('No se pudo registrar llm_error:', errMsg(logErr));
+          }
+        }
       }
     }
     throw new AllProvidersFailedError(

@@ -1,9 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
 import { MockLanguageModelV4 } from 'ai/test';
 import { createLlm, createFakeLlm, defaultModelFactory, AllProvidersFailedError } from '../src/llm/llm.js';
 import { createMemoryDb, migrate } from '../src/db/db.js';
 import { listEvents } from '../src/db/repo.js';
+import type { Db } from '../src/db/db.js';
 import type { Config } from '../src/config.js';
 
 const cfg = (llm: Partial<Config['llm']>) =>
@@ -48,6 +49,19 @@ describe('createLlm', () => {
     expect(err.attempts[0].error).toMatch(/429/);
     const evs = await listEvents(db, 10);
     expect(evs.filter((e) => e.type === 'llm_error')).toHaveLength(2);
+  });
+
+  it('si falla el registro en la base igual sigue con el próximo proveedor', async () => {
+    const brokenDb = { query: async () => { throw new Error('db caída'); } } as unknown as Db;
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const models: Record<string, MockLanguageModelV4> = { 'a:x': failModel(), 'b:y': okModel('hola') };
+    const ok = createLlm(cfg({ vendedor: ['a:x', 'b:y'] }), { modelFactory: (s) => models[s]!, db: brokenDb });
+    expect(await ok.text(args)).toBe('hola');
+    const bad = createLlm(cfg({ vendedor: ['a:x', 'b:y'] }), { modelFactory: () => failModel(), db: brokenDb });
+    const err = await bad.text(args).catch((e) => e);
+    expect(err).toBeInstanceOf(AllProvidersFailedError);
+    expect(err.attempts).toHaveLength(2);
+    spy.mockRestore();
   });
 
   it('lista vacía: rechaza sin intentos y menciona la variable', async () => {
