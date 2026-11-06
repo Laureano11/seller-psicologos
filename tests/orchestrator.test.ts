@@ -156,14 +156,14 @@ describe('tick', () => {
 
   it('3 fallos seguidos del mismo paso -> un solo aviso; se rearma tras recuperarse', async () => {
     runBuscador.mockRejectedValue(new Error('boom'));
-    for (let i = 0; i < 4; i++) await orch.tick(plus(MON_905, i * MIN));
+    for (let i = 0; i < 4; i++) await orch.tick(plus(MON_905, i * 31 * MIN));
     expect(await selfMsgs()).toEqual(['⚠️ El paso buscador falló 3 veces seguidas: boom']);
     runBuscador.mockResolvedValue({});
-    await orch.tick(plus(MON_905, 5 * MIN)); // recupera
+    await orch.tick(plus(MON_905, 5 * 31 * MIN)); // recupera
     runBuscador.mockRejectedValue(new Error('otra'));
     await orch.tick(new Date('2026-11-10T12:00:00Z'));
-    await orch.tick(new Date('2026-11-10T12:01:00Z'));
-    await orch.tick(new Date('2026-11-10T12:02:00Z'));
+    await orch.tick(new Date('2026-11-10T12:31:00Z'));
+    await orch.tick(new Date('2026-11-10T13:02:00Z'));
     expect(await selfMsgs()).toHaveLength(2);
   });
 
@@ -177,6 +177,37 @@ describe('tick', () => {
     expect(vendedor.handleInbound).toHaveBeenCalledTimes(5);
     expect(seen[0]).toEqual([1, [6, 7]]);
     expect(await repo.kvGet(db, 'pending_inbound')).toEqual([6, 7]);
+  });
+
+  it('reintentos: si handleInbound lanza, el id vuelve a pending_inbound y los demás se procesan', async () => {
+    await repo.kvSet(db, 'pending_inbound', [1, 2, 3]);
+    vendedor.handleInbound.mockImplementation(async (id: number) => { if (id === 1) throw new Error('x'); });
+    await orch.tick(FRI_NOON);
+    expect(vendedor.handleInbound).toHaveBeenCalledTimes(3);
+    expect(await repo.kvGet(db, 'pending_inbound')).toEqual([1]);
+  });
+
+  it('runDue: si handleInbound lanza, el prospecto queda en pending_inbound y cuenta como fallo de responder', async () => {
+    const p = (await repo.insertProspect(db, { name: 'Ana', waId: '5491111111111', status: 'contactado' }))!;
+    vendedor.handleInbound.mockRejectedValue(new Error('llm caído'));
+    const m = (id: string): IncomingMsg => ({ fromWaId: '5491111111111', text: 'hola', id, at: FRI_NOON, fromMe: false });
+    await orch.onIncoming(m('a'), FRI_NOON);
+    await orch.tick(plus(FRI_NOON, 31_000));
+    expect((await repo.kvGet<number[]>(db, 'pending_inbound'))).toContain(p.id);
+    expect((await repo.listEvents(db, 10)).find((e) => e.payload?.paso === 'responder')?.payload).toMatchObject({ mensaje: 'llm caído' });
+    // los reintentos siguen fallando: 3 ticks seguidos -> aviso (una vez)
+    await orch.tick(plus(FRI_NOON, 2 * MIN));
+    await orch.tick(plus(FRI_NOON, 3 * MIN));
+    await orch.tick(plus(FRI_NOON, 4 * MIN));
+    expect((await selfMsgs()).filter((b) => b.includes('reintentos'))).toHaveLength(1);
+  });
+
+  it('buscador que falla de forma permanente se reintenta como mucho cada 30 min', async () => {
+    runBuscador.mockRejectedValue(new Error('boom'));
+    for (let i = 0; i < 10; i++) await orch.tick(plus(MON_905, i * MIN));
+    expect(runBuscador).toHaveBeenCalledTimes(1);
+    await orch.tick(plus(MON_905, 31 * MIN));
+    expect(runBuscador).toHaveBeenCalledTimes(2);
   });
 
   it('single-flight: un tick durante otro en curso retorna de inmediato', async () => {

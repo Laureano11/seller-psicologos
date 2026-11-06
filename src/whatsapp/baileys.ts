@@ -23,6 +23,7 @@ export function createBaileysTransport(authDir: string): WaTransport {
   const emitStatus = (s: WaStatus) => status.forEach((cb) => cb(s));
   const logger = pino({ level: 'silent' });
   let sock: WASocket | undefined;
+  let stopped = false;
 
   async function connect(): Promise<void> {
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
@@ -39,6 +40,7 @@ export function createBaileysTransport(authDir: string): WaTransport {
           emitStatus({ state: 'sesion_cerrada' });
         } else {
           emitStatus({ state: 'desconectado' });
+          if (stopped) return;
           setTimeout(() => void connect().catch(() => emitStatus({ state: 'desconectado' })), 3000);
         }
       }
@@ -58,6 +60,10 @@ export function createBaileysTransport(authDir: string): WaTransport {
   }
 
   return {
+    async stop() {
+      stopped = true;
+      sock?.end(undefined);
+    },
     start: connect,
     async send(waId, text) {
       if (!sock) throw new Error('WhatsApp no conectado');

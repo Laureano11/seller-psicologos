@@ -7,6 +7,7 @@ export type WaStatus = {
 
 export interface WaTransport {
   start(): Promise<void>;
+  stop?(): Promise<void>;
   send(waId: string, text: string): Promise<string>;
   hasWhatsApp(waId: string): Promise<boolean>;
   onIncoming(cb: (m: IncomingMsg) => void): void;

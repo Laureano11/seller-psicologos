@@ -22,6 +22,7 @@ const WA_DOWN_ALERT_MS = 10 * MIN;
 const MAX_RETRIES_PER_TICK = 5;
 const BRAKE_BAJAS = 3;
 const FAIL_STREAK_ALERT = 3;
+const RETRY_FAILED_MS = 30 * MIN;
 
 export function createOrchestrator(deps: OrchestratorDeps) {
   const { db, config, gateway, vendedor } = deps;
@@ -29,6 +30,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
   const dueAt = new Map<number, Date>(); // prospectId -> hora programada del handleInbound
   const failStreak = new Map<string, number>();
   const alerted = new Set<string>();
+  const lastFailure = new Map<string, Date>();
   let running = false;
   let waDownSince: Date | null = null;
   let waDownLogged = false;
@@ -40,25 +42,39 @@ export function createOrchestrator(deps: OrchestratorDeps) {
     if (r?.triggerAgent) dueAt.set(r.prospectId, new Date(now.getTime() + config.replyDebounceSeconds * 1000));
   }
 
+  async function addPending(prospectId: number): Promise<void> {
+    const pending = (await kvGet<number[]>(db, 'pending_inbound')) ?? [];
+    if (!pending.includes(prospectId)) await kvSet(db, 'pending_inbound', [...pending, prospectId]);
+  }
+
   async function runDue(now: Date): Promise<void> {
     const due = [...dueAt.entries()].filter(([, at]) => at.getTime() <= now.getTime());
+    const errors: string[] = [];
     for (const [prospectId] of due) {
       dueAt.delete(prospectId);
       try {
         await vendedor.handleInbound(prospectId, now);
       } catch (e) {
-        await logEvent(db, 'error', { paso: 'responder', prospectId, mensaje: errMsg(e) });
+        errors.push(errMsg(e));
+        await addPending(prospectId); // no se pierde la respuesta: la reintenta el paso de reintentos
       }
     }
+    if (errors.length) throw new Error(errors.join('; '));
   }
 
-  async function step(paso: string, fn: () => Promise<void>): Promise<void> {
+  async function step(paso: string, fn: () => Promise<void>, opts: { now?: Date; backoff?: boolean } = {}): Promise<void> {
+    if (opts.backoff && opts.now) {
+      const failedAt = lastFailure.get(paso);
+      if (failedAt && opts.now.getTime() - failedAt.getTime() < RETRY_FAILED_MS) return;
+    }
     try {
       await fn();
       failStreak.delete(paso);
+      lastFailure.delete(paso);
       alerted.delete(paso);
     } catch (e) {
       const mensaje = errMsg(e);
+      if (opts.now) lastFailure.set(paso, opts.now);
       const n = (failStreak.get(paso) ?? 0) + 1;
       failStreak.set(paso, n);
       try {
@@ -84,7 +100,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
         if (dt.hour < config.searchHour || (await kvGet<string>(db, 'buscador_last_date')) === today) return;
         await deps.runBuscador(now);
         await kvSet(db, 'buscador_last_date', today);
-      });
+      }, { now, backoff: true });
 
       // El freno se evalúa antes de iniciar contactos para que el mismo tick ya respete la pausa.
       await step('freno', async () => {
@@ -111,7 +127,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
         if (dt.hour < 10 || (await kvGet<string>(db, 'followups_last_date')) === today) return;
         await vendedor.runFollowups(now);
         await kvSet(db, 'followups_last_date', today);
-      });
+      }, { now, backoff: true });
 
       await step('reintentos', async () => {
         const pending = (await kvGet<number[]>(db, 'pending_inbound')) ?? [];
@@ -119,7 +135,16 @@ export function createOrchestrator(deps: OrchestratorDeps) {
         if (!batch.length) return;
         // R2: se sacan antes de reintentar; handleInbound los vuelve a agregar si falla de nuevo.
         await kvSet(db, 'pending_inbound', pending.filter((id) => !batch.includes(id)));
-        for (const id of batch) await vendedor.handleInbound(id, now);
+        const errors: string[] = [];
+        for (const id of batch) {
+          try {
+            await vendedor.handleInbound(id, now);
+          } catch (e) {
+            errors.push(errMsg(e));
+            await addPending(id);
+          }
+        }
+        if (errors.length) throw new Error(errors.join('; '));
       });
 
       await step('analisis', async () => {
@@ -127,7 +152,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
         if (dt.weekday !== 1 || dt.hour < 8 || (await kvGet<string>(db, 'analysis_last_week')) === week) return;
         await deps.runWeeklyAnalysis(now);
         await kvSet(db, 'analysis_last_week', week);
-      });
+      }, { now, backoff: true });
 
       await step('wa_estado', async () => {
         if (waDownSince && !waDownLogged && now.getTime() - waDownSince.getTime() > WA_DOWN_ALERT_MS) {
