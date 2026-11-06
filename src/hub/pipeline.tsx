@@ -200,9 +200,9 @@ export function PipelineView({ d, config, fmt }: { d: PipelineData; config: Conf
         <h3>Flujo</h3>
         <div class="flow">
           <Node title="Fuentes" n="Google Places, sitios web" cls="ext" /><Arrow />
-          <Node title="Buscador (9:00)" /><Arrow />
+          <Node title={`Buscador (${config.searchHour}:00)`} /><Arrow />
           <Node title="Base de prospectos" n={`${d.totalProspects} encontrados`} /><Arrow />
-          <Node title="Orquestador (cada minuto, máx 5/día)" n={`${d.contactsToday} contactos hoy`} /><Arrow />
+          <Node title={`Orquestador (cada minuto, máx ${config.dailyNewContacts}/día)`} n={`${d.contactsToday} contactos hoy`} /><Arrow />
           <Node title="Vendedor" /><Arrow />
           <Node title="Outbox" n={`${d.outbox.pendiente} pendientes / ${d.outbox.enviadoHoy} enviados hoy / ${d.outbox.bloqueado} bloqueados`} /><Arrow />
           <Node title="WhatsApp" n={d.waState} cls="ext" /><Arrow />
@@ -226,7 +226,7 @@ export function PipelineView({ d, config, fmt }: { d: PipelineData; config: Conf
       </div>
 
       <div class="agents">
-        <Agent name="Buscador" does="Busca psicólogos en Google Places y sus sitios web y los carga como prospectos." when="todos los días a las 9:00"
+        <Agent name="Buscador" does="Busca psicólogos en Google Places y sus sitios web y los carga como prospectos." when={`todos los días a las ${config.searchHour}:00`}
           models={config.llm.buscador} a={d.buscador} fmt={fmt}
           info={[`Ciudad actual (cursor): ${d.cursorCity}`, `Fuentes: sitios web${config.googlePlacesKey ? ', Google Places' : ''}`]}
           extra={run ? `found ${run.found ?? 0}, inserted ${run.inserted ?? 0}, skipped ${oneLine(run.skipped)}` : undefined} />
