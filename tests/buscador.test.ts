@@ -128,4 +128,62 @@ describe('runBuscador', () => {
     expect(res.inserted).toBe(1);
     expect((await repo.listEvents(db, 50)).some((e) => e.type === 'buscador_source_error')).toBe(true);
   });
+
+  it('el cursor se guarda y se lee: retoma en una ciudad posterior', async () => {
+    const calls: string[] = [];
+    const src: ProspectSource = {
+      name: 'fake',
+      search: async (q) => {
+        calls.push(q.city);
+        return q.city === CITIES[2]!.city ? [raw('A', '11 1111-1111'), raw('B', '11 2222-2222'), raw('C', '11 4444-4444')] : [];
+      },
+    };
+    const deps = mkDeps([src], { config: { buscadorMaxPerDay: 2 } });
+    const r1 = await runBuscador(deps, new Date());
+    expect(r1.inserted).toBe(2);
+    expect(calls).toEqual([CITIES[0]!.city, CITIES[1]!.city, CITIES[2]!.city]);
+    expect(await repo.kvGet(db, 'buscador_cursor')).toBe(2);
+
+    calls.length = 0;
+    const r2 = await runBuscador(deps, new Date());
+    expect(calls[0]).toBe(CITIES[2]!.city); // no vuelve a las ciudades 0 y 1
+    expect(calls.indexOf(CITIES[0]!.city)).toBe(CITIES.length - 2); // recién al final de la vuelta
+    expect(r2.inserted).toBe(1);
+    // ciudad 2 completada: el cursor avanzó y la corrida siguió hasta dar la vuelta
+    expect(calls[1]).toBe(CITIES[3]!.city);
+    expect(await repo.kvGet(db, 'buscador_cursor')).toBe(2);
+  });
+
+  it('el cursor avanza más allá de una ciudad completada cuando se alcanza el tope justo después', async () => {
+    const src: ProspectSource = {
+      name: 'fake',
+      search: async (q) => (q.city === CITIES[2]!.city ? [raw('A', '11 1111-1111')] : []),
+    };
+    await runBuscador(mkDeps([src], { config: { buscadorMaxPerDay: 1 } }), new Date());
+    expect(await repo.kvGet(db, 'buscador_cursor')).toBe(3);
+  });
+
+  it('un error en un raw no aborta la corrida: se cuenta como error y se guarda el cursor', async () => {
+    const deps = mkDeps([sourceOf([raw('A', '11 1111-1111'), raw('B', '11 2222-2222')])]);
+    let n = 0;
+    deps.wa.hasWhatsApp = async (w: string) => {
+      if (n++ === 0) throw new Error('desconectado');
+      return deps.wa.whatsappNumbers.has(w);
+    };
+    const res = await runBuscador(deps, new Date());
+    expect(res.skipped.error).toBe(1);
+    expect(res.inserted).toBe(1);
+    expect(await repo.kvGet(db, 'buscador_cursor')).toBe(0);
+    expect((await repo.listEvents(db, 100)).some((e) => e.type === 'buscador_run')).toBe(true);
+  });
+
+  it('duplicado por teléfono de Places no enriquece (ni fetch ni LLM)', async () => {
+    await repo.insertProspect(db, { name: 'Existente', waId: '5491111111111' });
+    let llmCalls = 0, fetchCalls = 0;
+    const llm = createFakeLlm(() => { llmCalls++; return {}; });
+    const fetchFn = (async () => { fetchCalls++; return new Response('x'); }) as unknown as typeof fetch;
+    const res = await runBuscador(mkDeps([sourceOf([raw('D', '11 1111-1111', { website: 'https://d.com' })])], { llm, fetchFn }), new Date());
+    expect(res.skipped.duplicado).toBe(1);
+    expect(llmCalls + fetchCalls).toBe(0);
+  });
 });

@@ -34,14 +34,14 @@ export async function runBuscador(deps: BuscadorDeps, now: Date): Promise<Buscad
   let cursor = (await kvGet<number>(db, 'buscador_cursor')) ?? 0;
   if (!Number.isInteger(cursor) || cursor < 0 || cursor >= CITIES.length) cursor = 0;
 
-  // Devuelve true si el raw se procesó (false si se cortó por tope antes de procesarlo).
   async function processRaw(raw: RawProspect): Promise<void> {
     result.found++;
     const placesWaId = raw.phone ? toWaId(raw.phone) : null;
     if (placesWaId && (await getProspectByWaId(db, placesWaId))) return skip('duplicado');
 
     const enr = await enrichFromWebsite(raw, { llm, fetchFn: deps.fetchFn });
-    const waId = (enr.whatsapp ? toWaId(enr.whatsapp) : null) ?? placesWaId;
+    const enrWaId = enr.whatsapp ? toWaId(enr.whatsapp) : null;
+    const waId = enrWaId ?? placesWaId;
     if (!waId) return skip('sin_telefono');
     if (await getProspectByWaId(db, waId)) return skip('duplicado');
     if (await isOptedOut(db, waId)) return skip('opt_out');
@@ -50,7 +50,7 @@ export async function runBuscador(deps: BuscadorDeps, now: Date): Promise<Buscad
 
     const p = await insertProspect(db, {
       name: raw.name,
-      phoneRaw: enr.whatsapp ?? raw.phone,
+      phoneRaw: enrWaId ? enr.whatsapp : raw.phone,
       waId,
       email: enr.email,
       city: raw.city,
@@ -86,7 +86,14 @@ export async function runBuscador(deps: BuscadorDeps, now: Date): Promise<Buscad
       }
       for (const raw of raws) {
         if (result.inserted >= max) { complete = false; break; }
-        await processRaw(raw);
+        try {
+          await processRaw(raw);
+        } catch (e) {
+          skip('error');
+          await logEvent(db, 'buscador_raw_error', {
+            name: raw.name, sourceRef: raw.sourceRef, error: e instanceof Error ? e.message : String(e),
+          }).catch(() => undefined);
+        }
       }
       if (!complete) break;
     }
