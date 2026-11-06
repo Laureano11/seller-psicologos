@@ -4,7 +4,7 @@ import { seedKnowledge } from './db/repo.js';
 import { createBaileysTransport } from './whatsapp/baileys.js';
 import { WaGateway } from './whatsapp/gateway.js';
 import { createLlm } from './llm/llm.js';
-import { createDncChecker } from './dnc.js';
+import { createDncChecker, reportDncStatus } from './dnc.js';
 import { createGooglePlacesSource, type ProspectSource } from './agents/buscador/sources.js';
 import { runBuscador } from './agents/buscador/run.js';
 import { createGoogleServices } from './agents/agenda/google.js';
@@ -22,6 +22,8 @@ async function main() {
   const gateway = new WaGateway(db, transport, config);
   const llm = createLlm(config, { db });
   const dnc = createDncChecker(config);
+  // si falta el archivo No Llame no se cae (evita el reinicio en bucle): evento + banner en el hub
+  if (!(await reportDncStatus(db, dnc))) console.error(`[worker] falta el archivo No Llame: ${config.dncFile}`);
   const sources: ProspectSource[] = config.googlePlacesKey ? [createGooglePlacesSource(config.googlePlacesKey)] : [];
   const google = config.google ? createGoogleServices(config.google) : undefined;
   const vendedor = createVendedor({ db, llm, gateway, calendar: google?.calendar, mail: google?.mail, config });

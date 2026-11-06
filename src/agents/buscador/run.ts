@@ -1,7 +1,7 @@
 import type { Db } from '../../db/db.js';
 import type { Config } from '../../config.js';
 import type { Llm } from '../../llm/llm.js';
-import type { DncChecker } from '../../dnc.js';
+import { reportDncStatus, type DncChecker } from '../../dnc.js';
 import type { WaTransport } from '../../whatsapp/transport.js';
 import { toWaId } from '../../phone.js';
 import { getProspectByWaId, insertProspect, isOptedOut, kvGet, kvSet, logEvent } from '../../db/repo.js';
@@ -30,6 +30,13 @@ export async function runBuscador(deps: BuscadorDeps, now: Date): Promise<Buscad
   const result: BuscadorResult = { found: 0, inserted: 0, skipped: {} };
   const skip = (why: string) => { result.skipped[why] = (result.skipped[why] ?? 0) + 1; };
   const max = config.buscadorMaxPerDay;
+
+  // sin archivo No Llame no se agrega a nadie (bloqueado por configuración); ni se gasta la búsqueda
+  if (!(await reportDncStatus(db, dnc))) {
+    skip('no_llame_sin_archivo');
+    await logEvent(db, 'buscador_run', { ...result, at: now.toISOString() });
+    return result;
+  }
 
   let cursor = (await kvGet<number>(db, 'buscador_cursor')) ?? 0;
   if (!Number.isInteger(cursor) || cursor < 0 || cursor >= CITIES.length) cursor = 0;

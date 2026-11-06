@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createMemoryDb, migrate, type Db } from '../src/db/db.js';
 import * as repo from '../src/db/repo.js';
 import { createFakeLlm, AllProvidersFailedError } from '../src/llm/llm.js';
@@ -35,6 +35,8 @@ beforeEach(async () => {
   await repo.addManualVersion(db, 'ventas', 'MANUAL VIEJO', 'archivo');
   calls = 0;
 });
+
+afterEach(async () => { await db.close(); });
 
 describe('compareVariants', () => {
   it('confirmado con datos suficientes', () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createMemoryDb, migrate, type Db } from '../src/db/db.js';
 import * as repo from '../src/db/repo.js';
 import { WaGateway } from '../src/whatsapp/gateway.js';
@@ -50,6 +50,8 @@ beforeEach(async () => {
   };
   mail = { send: async (m) => { sent.push(m); } };
 });
+
+afterEach(async () => { await db.close(); });
 
 describe('openers', () => {
   it('pickOpenerVariant elige la candidata si tiene menos prospectos', async () => {
@@ -241,17 +243,43 @@ describe('answerEscalation con fallo del modelo', () => {
   });
 });
 
+describe('answerEscalation doble', () => {
+  it('dos respuestas a la misma consulta: solo una se envía, la otra falla con "ya fue respondida"', async () => {
+    const p = await prospect({ needsAttention: 'pregunta' });
+    const id = await repo.createEscalation(db, p.id, '¿Cuánto sale?');
+    const v = make(createFakeLlm(() => 'Sale 10 lucas'));
+    const rs = await Promise.allSettled([v.answerEscalation(id, '10 lucas'), v.answerEscalation(id, '12 lucas')]);
+    expect(rs.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const rej = rs.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(rej.reason).toBeInstanceOf(repo.EscalationNotOpenError);
+    expect(rej.reason.message).toContain('ya fue respondida');
+    expect(await toProspect()).toHaveLength(1);
+    expect(await repo.listFaq(db)).toHaveLength(1);
+    await expect(v.answerEscalation(id, 'otra')).rejects.toBeInstanceOf(repo.EscalationNotOpenError);
+    expect(await toProspect()).toHaveLength(1);
+  });
+
+  it('tras un fallo del modelo se puede volver a responder', async () => {
+    const p = await prospect({ needsAttention: 'pregunta' });
+    const id = await repo.createEscalation(db, p.id, '¿Cuánto sale?');
+    await expect(make(createFakeLlm(() => { throw new AllProvidersFailedError('x', []); })).answerEscalation(id, 'a')).rejects.toBeInstanceOf(AllProvidersFailedError);
+    await make(createFakeLlm(() => 'Sale 10')).answerEscalation(id, '10');
+    expect((await repo.getEscalation(db, id))?.status).toBe('respondida');
+    expect(await toProspect()).toHaveLength(1);
+  });
+});
+
 describe('startConversation guards', () => {
   it('no hace nada si no está encontrado', async () => {
     await repo.addVariant(db, 'Hola', 'activa');
     const p = await prospect({ status: 'conversando' });
-    await make(createFakeLlm(() => 'Hola')).startConversation(p.id, NOW);
+    expect(await make(createFakeLlm(() => 'Hola')).startConversation(p.id, NOW)).toBe(false);
     expect(await outbox()).toHaveLength(0);
   });
   it('texto vacío no marca contactado', async () => {
     await repo.addVariant(db, 'Hola', 'activa');
     const p = await prospect({ status: 'encontrado' });
-    await make(createFakeLlm(() => '  ')).startConversation(p.id, NOW);
+    expect(await make(createFakeLlm(() => '  ')).startConversation(p.id, NOW)).toBe(false);
     expect((await repo.getProspect(db, p.id))?.status).toBe('encontrado');
   });
 });

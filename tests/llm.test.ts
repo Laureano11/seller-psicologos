@@ -49,6 +49,7 @@ describe('createLlm', () => {
     expect(err.attempts[0].error).toMatch(/429/);
     const evs = await listEvents(db, 10);
     expect(evs.filter((e) => e.type === 'llm_error')).toHaveLength(2);
+    await db.close();
   });
 
   it('si falla el registro en la base igual sigue con el próximo proveedor', async () => {

@@ -1,4 +1,7 @@
-export type IncomingMsg = { fromWaId: string; text: string; id: string; at: Date; fromMe: boolean };
+export type MediaKind = 'audio' | 'imagen' | 'sticker' | 'documento' | 'video' | 'no_soportado';
+
+/** `media` presente = mensaje que no es texto; `text` trae el placeholder (`[audio]`, `[imagen]`, ...). */
+export type IncomingMsg = { fromWaId: string; text: string; id: string; at: Date; fromMe: boolean; media?: MediaKind };
 
 export type WaStatus = {
   state: 'conectando' | 'qr' | 'conectado' | 'desconectado' | 'sesion_cerrada';

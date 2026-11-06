@@ -36,6 +36,8 @@ export interface Prospect {
   contactedAt: Date | null;
   lastInboundAt: Date | null;
   lastOutboundAt: Date | null;
+  /** last_inbound_at del último entrante ya atendido (por el vendedor o escalado al dueño). */
+  inboundHandledAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -62,6 +64,8 @@ export interface OutboxItem {
   status: string;
   waMessageId: string | null;
   error: string | null;
+  attempts: number;
+  lastError: string | null;
 }
 
 export interface Escalation {
@@ -161,11 +165,29 @@ export async function listProspectsForHub(db: Db): Promise<Prospect[]> {
 export async function pickContactable(db: Db, limit: number): Promise<Prospect[]> {
   return mapRows(await db.query(
     `SELECT * FROM prospects
-     WHERE status='encontrado' AND wa_id IS NOT NULL
+     WHERE status='encontrado' AND wa_id IS NOT NULL AND NOT handed_off
        AND wa_id NOT IN (SELECT wa_id FROM opt_outs)
      ORDER BY created_at ASC, id ASC LIMIT $1`,
     [limit],
   ));
+}
+
+/**
+ * Prospectos con un entrante sin atender (último entrante posterior al último saliente y a la última atención),
+ * más viejo que `before`, sin toma de control, en estado activo y sin respuesta pendiente en el outbox.
+ */
+export async function listUnansweredInbound(db: Db, before: Date): Promise<number[]> {
+  const r = await db.query<{ id: number }>(
+    `SELECT p.id FROM prospects p
+     WHERE p.last_inbound_at IS NOT NULL AND p.last_inbound_at <= $1
+       AND p.last_inbound_at > coalesce(p.last_outbound_at, p.contacted_at, 'epoch')
+       AND p.last_inbound_at > coalesce(p.inbound_handled_at, 'epoch')
+       AND NOT p.handed_off AND p.status <> ALL($2)
+       AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.prospect_id=p.id AND o.status='pendiente')
+     ORDER BY p.last_inbound_at, p.id`,
+    [before, BLOCKED_STATUSES],
+  );
+  return r.map((x) => x.id);
 }
 
 export async function countContactedSince(db: Db, since: Date): Promise<number> {
@@ -220,11 +242,42 @@ export async function markOutboxFailed(db: Db, id: number, error: string): Promi
   await db.query("UPDATE outbox SET status='fallido', error=$2 WHERE id=$1", [id, error]);
 }
 
+/** Registra un intento de envío fallido; al llegar a `maxAttempts` lo marca fallido. Devuelve el item actualizado. */
+export async function recordOutboxAttemptFailed(db: Db, id: number, error: string, maxAttempts: number): Promise<OutboxItem> {
+  const rows = await db.query(
+    `UPDATE outbox SET attempts=attempts+1, last_error=$2,
+       status=CASE WHEN attempts+1 >= $3 THEN 'fallido' ELSE status END,
+       error=CASE WHEN attempts+1 >= $3 THEN $2 ELSE error END
+     WHERE id=$1 RETURNING *`,
+    [id, error, maxAttempts],
+  );
+  return mapRow<OutboxItem>(rows[0])!;
+}
+
 // ---------- escalations / faq ----------
 
 export async function createEscalation(db: Db, prospectId: number, question: string): Promise<number> {
   const r = await db.query<{ id: number }>('INSERT INTO escalations (prospect_id, question) VALUES ($1,$2) RETURNING id', [prospectId, question]);
   return r[0].id;
+}
+
+/** La escalación ya no está abierta (otra respuesta la tomó o ya fue respondida). */
+export class EscalationNotOpenError extends Error {
+  constructor(id: number) {
+    super(`La consulta ${id} ya fue respondida`);
+    this.name = 'EscalationNotOpenError';
+  }
+}
+
+/** Toma la escalación de forma atómica (abierta -> respondiendo); undefined si ya no estaba abierta. */
+export async function claimEscalation(db: Db, id: number): Promise<Escalation | undefined> {
+  return mapRow<Escalation>((await db.query(
+    "UPDATE escalations SET status='respondiendo' WHERE id=$1 AND status='abierta' RETURNING *", [id],
+  ))[0]);
+}
+
+export async function releaseEscalation(db: Db, id: number): Promise<void> {
+  await db.query("UPDATE escalations SET status='abierta' WHERE id=$1 AND status='respondiendo'", [id]);
 }
 
 export async function answerEscalationRow(db: Db, id: number, answer: string): Promise<void> {

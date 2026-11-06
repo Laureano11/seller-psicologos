@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createMemoryDb, migrate, type Db } from '../src/db/db.js';
 import * as repo from '../src/db/repo.js';
 import { createFakeLlm, AllProvidersFailedError } from '../src/llm/llm.js';
@@ -13,6 +13,8 @@ beforeEach(async () => {
   db = await createMemoryDb();
   await migrate(db);
 });
+
+afterEach(async () => { await db.close(); });
 
 const raw = (name: string, phone: string | undefined, extra: Partial<RawProspect> = {}): RawProspect => ({
   name, phone, city: 'CABA', province: 'CABA', source: 'fake', sourceRef: name, ...extra,

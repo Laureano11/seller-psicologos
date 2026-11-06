@@ -4,8 +4,9 @@ import type { Llm, ChatMessage } from '../../llm/llm.js';
 import { AllProvidersFailedError } from '../../llm/llm.js';
 import type { WaGateway } from '../../whatsapp/gateway.js';
 import {
-  BLOCKED_STATUSES, addFaq, addMeeting, answerEscalationRow, applyOptOut, createEscalation, getEscalation,
-  getProspect, isOptedOut, kvGet, kvSet, listMessages, listProspectsForHub, listVariants, logEvent, setStatus, updateProspect,
+  BLOCKED_STATUSES, EscalationNotOpenError, addFaq, addMeeting, answerEscalationRow, applyOptOut, claimEscalation,
+  createEscalation, getEscalation, getProspect, isOptedOut, kvGet, kvSet, listMessages, listProspectsForHub,
+  listVariants, logEvent, releaseEscalation, setStatus, updateProspect,
   type Prospect,
 } from '../../db/repo.js';
 import type { CalendarService, MailService } from '../agenda/google.js';
@@ -49,9 +50,10 @@ export function createVendedor(deps: VendedorDeps) {
     return { id: v.id, template: v.template };
   }
 
-  async function startConversation(prospectId: number, now: Date): Promise<void> {
+  /** Devuelve true si encoló el mensaje de apertura; false si no hizo nada. */
+  async function startConversation(prospectId: number, now: Date): Promise<boolean> {
     const p = await getProspect(db, prospectId);
-    if (!p || p.status !== 'encontrado' || p.handedOff || (p.waId && (await isOptedOut(db, p.waId)))) return;
+    if (!p || p.status !== 'encontrado' || p.handedOff || (p.waId && (await isOptedOut(db, p.waId)))) return false;
     const k = await loadKnowledge(db);
     const variant = await pickOpenerVariant();
     const text = await llm.text({
@@ -62,9 +64,10 @@ export function createVendedor(deps: VendedorDeps) {
         content: `Ficha del prospecto:\n${prospectCard(p)}\n\nPlantilla de apertura (adaptala a la persona, manteniendo la idea):\n${variant.template}\n\nEscribí solo el mensaje.`,
       }],
     });
-    if (!text.trim()) return;
+    if (!text.trim()) return false;
     await say(prospectId, text);
     await updateProspect(db, prospectId, { status: 'contactado', contactedAt: now, openerVariantId: variant.id });
+    return true;
   }
 
   async function history(prospectId: number): Promise<ChatMessage[]> {
@@ -194,21 +197,33 @@ export function createVendedor(deps: VendedorDeps) {
     if (status) await setStatus(db, p.id, status);
   }
 
+  /**
+   * Toma la escalación de forma atómica antes de redactar (evita dos respuestas a la misma consulta).
+   * Si ya no estaba abierta lanza EscalationNotOpenError; si falla la redacción la vuelve a abrir y relanza.
+   */
   async function answerEscalation(escalationId: number, answer: string): Promise<void> {
-    const esc = await getEscalation(db, escalationId);
-    if (!esc) return;
+    const esc = await claimEscalation(db, escalationId);
+    if (!esc) {
+      if (!(await getEscalation(db, escalationId))) return;
+      throw new EscalationNotOpenError(escalationId);
+    }
     const p = await getProspect(db, esc.prospectId);
     let text = '';
-    if (p) {
-      const k = await loadKnowledge(db);
-      text = await llm.text({
-        agent: 'vendedor',
-        system: buildTextPrompt(k, p, config.ownerName),
-        messages: [
-          ...(await history(p.id)),
-          { role: 'user', content: `[Instrucción interna] ${config.ownerName} respondió tu consulta "${esc.question}": "${answer}". Redactá la respuesta para el prospecto, en el estilo de ${config.ownerName}. Solo el mensaje.` },
-        ],
-      });
+    try {
+      if (p) {
+        const k = await loadKnowledge(db);
+        text = await llm.text({
+          agent: 'vendedor',
+          system: buildTextPrompt(k, p, config.ownerName),
+          messages: [
+            ...(await history(p.id)),
+            { role: 'user', content: `[Instrucción interna] ${config.ownerName} respondió tu consulta "${esc.question}": "${answer}". Redactá la respuesta para el prospecto, en el estilo de ${config.ownerName}. Solo el mensaje.` },
+          ],
+        });
+      }
+    } catch (e) {
+      await releaseEscalation(db, escalationId);
+      throw e;
     }
     await answerEscalationRow(db, escalationId, answer);
     await addFaq(db, esc.question, answer);

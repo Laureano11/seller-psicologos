@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createMemoryDb, migrate, type Db } from '../src/db/db.js';
 import * as repo from '../src/db/repo.js';
+import { EscalationNotOpenError } from '../src/db/repo.js';
 import { createHubApp } from '../src/hub/app.js';
 import type { Config } from '../src/config.js';
 
@@ -12,7 +13,7 @@ let app: ReturnType<typeof createHubApp>;
 
 const form = (o: Record<string, string>) => ({
   method: 'POST',
-  headers: { ...auth, 'content-type': 'application/x-www-form-urlencoded' },
+  headers: { ...auth, 'content-type': 'application/x-www-form-urlencoded', origin: 'http://localhost' },
   body: new URLSearchParams(o).toString(),
 });
 
@@ -23,6 +24,8 @@ beforeEach(async () => {
   answer = vi.fn(async () => {});
   app = createHubApp({ db, config, answerEscalation: answer as any });
 });
+
+afterEach(async () => { await db.close(); });
 
 describe('hub', () => {
   it('auth: 401 sin credenciales, 200 con, /health libre', async () => {
@@ -110,5 +113,41 @@ describe('hub', () => {
     const html = await (await app.request('/sistema', { headers: auth })).text();
     expect(html).toContain('<img');
     expect(html).toContain('data:image/png');
+  });
+  it('CSRF: POST desde otro origen -> 403; sin credenciales -> 401', async () => {
+    const id = await repo.addProposal(db, { kind: 'manual', summary: 'S', evidence: 'E', proposedContent: 'C' });
+    const evil = form({});
+    const r = await app.request(`/proposals/${id}/approve`, { ...evil, headers: { ...evil.headers, origin: 'https://malo.example' } });
+    expect(r.status).toBe(403);
+    const noOrigin = await app.request(`/proposals/${id}/approve`, {
+      method: 'POST', headers: { ...auth, 'content-type': 'application/x-www-form-urlencoded' }, body: '',
+    });
+    expect(noOrigin.status).toBe(403);
+    const anon = await app.request(`/proposals/${id}/approve`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'http://localhost' }, body: '',
+    });
+    expect(anon.status).toBe(401);
+    expect((await repo.getProposal(db, id))!.status).toBe('pendiente');
+    const sameSite = await app.request(`/proposals/${id}/reject`, {
+      method: 'POST', headers: { ...auth, 'content-type': 'application/x-www-form-urlencoded', 'sec-fetch-site': 'same-origin' }, body: '',
+    });
+    expect(sameSite.status).toBe(302);
+  });
+
+  it('escalación ya respondida -> banner "ya fue respondida"', async () => {
+    const p = (await repo.insertProspect(db, { name: 'Ana', waId: '5491100000001' }))!;
+    const esc = await repo.createEscalation(db, p.id, 'q');
+    answer.mockRejectedValueOnce(new EscalationNotOpenError(esc));
+    const r = await app.request(`/escalations/${esc}/answer`, form({ answer: 'x' }));
+    const html = await (await app.request(r.headers.get('location')!, { headers: auth })).text();
+    expect(html).toContain('Esta consulta ya fue respondida.');
+  });
+
+  it('falta el archivo No Llame -> banner', async () => {
+    await repo.kvSet(db, 'dnc_error', { archivo: '/app/data/no_llame.csv' });
+    const html = await (await app.request('/', { headers: auth })).text();
+    expect(html).toContain('Falta el archivo del Registro No Llame');
+    await repo.kvSet(db, 'dnc_error', null);
+    expect(await (await app.request('/', { headers: auth })).text()).not.toContain('Falta el archivo del Registro No Llame');
   });
 });

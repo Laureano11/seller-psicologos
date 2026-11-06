@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
 import { basicAuth } from 'hono/basic-auth';
+import { csrf } from 'hono/csrf';
 import QRCode from 'qrcode';
 import type { Db } from '../db/db.js';
 import type { Config } from '../config.js';
 import {
-  getEscalation, getProposal, getProspect, kvGet, listEvents, listManualVersions, listMessages,
+  EscalationNotOpenError, getEscalation, getProposal, getProspect, kvGet, listEvents, listManualVersions, listMessages,
   listOpenEscalations, listProposals, listProspectsForHub, listUpcomingMeetings, listVariants,
 } from '../db/repo.js';
 import { compareVariants, variantStats } from '../learning/stats.js';
@@ -26,10 +27,21 @@ export function createHubApp(deps: HubDeps) {
 
   app.get('/health', (c) => c.text('ok'));
   app.use('*', basicAuth({ username: config.hubUser, password: config.hubPassword }));
+  // POST solo desde el propio hub: se compara el host del Origin (detrás del túnel el esquema puede diferir)
+  app.use('*', csrf({
+    origin: (origin, c) => {
+      try {
+        return new URL(origin).host === (c.req.header('host') ?? new URL(c.req.url).host);
+      } catch {
+        return false;
+      }
+    },
+  }));
 
   async function banners(): Promise<string[]> {
     const out: string[] = [];
     if (config.dncMode === 'off') out.push('Atención: el registro No Llame está desactivado (DNC_MODE=off). Se puede contactar a números inscriptos.');
+    if (await kvGet(db, 'dnc_error')) out.push('Falta el archivo del Registro No Llame (DNC_FILE). El buscador no agrega prospectos hasta que lo cargues.');
     if (await kvGet(db, 'pausa_nuevos')) out.push('Los contactos nuevos están en pausa.');
     const wa = await kvGet<{ state: string }>(db, 'wa_status');
     if (wa?.state !== 'conectado') out.push(`WhatsApp no está conectado (${wa?.state ?? 'sin estado'}). Revisá la pestaña Sistema.`);
@@ -74,6 +86,7 @@ export function createHubApp(deps: HubDeps) {
     try {
       await deps.answerEscalation(id, answer);
     } catch (e) {
+      if (e instanceof EscalationNotOpenError) return c.redirect(withError(back, 'Esta consulta ya fue respondida.'));
       console.error('[hub] error al responder escalación', e);
       return c.redirect(withError(back, 'No se pudo enviar la respuesta (los proveedores de IA no respondieron). Probá de nuevo en un rato; la consulta sigue abierta.'));
     }

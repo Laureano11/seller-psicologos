@@ -50,6 +50,15 @@ export function loadConfig(env: Env): Config {
   const dncFile = env.DNC_FILE?.trim() || undefined;
   if (dncMode === 'file' && !dncFile) throw new Error('DNC_MODE=file requiere DNC_FILE');
 
+  const ownerWaId = req('OWNER_WA_ID');
+  if (!/^\d{10,15}$/.test(ownerWaId) || ownerWaId === '5491100000000') {
+    throw new Error('OWNER_WA_ID debe ser tu número real de WhatsApp: 10 a 15 dígitos, formato internacional sin + (ej. 5491123456789)');
+  }
+  const hubPassword = req('HUB_PASSWORD');
+  if (hubPassword.length < 10 || hubPassword === 'cambiame') {
+    throw new Error('HUB_PASSWORD debe tener al menos 10 caracteres y no ser la de ejemplo');
+  }
+
   const google =
     env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.GOOGLE_REFRESH_TOKEN
       ? {
@@ -73,7 +82,7 @@ export function loadConfig(env: Env): Config {
     closeAfterDays: num('CLOSE_AFTER_DAYS', 4),
     maxFollowups: num('MAX_FOLLOWUPS', 1),
     abMinPerVariant: num('AB_MIN_PER_VARIANT', 30),
-    ownerWaId: req('OWNER_WA_ID'),
+    ownerWaId,
     ownerName: env.OWNER_NAME?.trim() || 'Lauri',
     dncMode,
     dncFile,
@@ -81,7 +90,7 @@ export function loadConfig(env: Env): Config {
     googlePlacesKey: env.GOOGLE_PLACES_KEY?.trim() || undefined,
     google,
     hubUser: env.HUB_USER?.trim() || 'admin',
-    hubPassword: req('HUB_PASSWORD'),
+    hubPassword,
     contentDir: env.CONTENT_DIR?.trim() || 'content',
     waAuthDir: env.WA_AUTH_DIR?.trim() || 'wa_auth',
     replyDebounceSeconds: num('REPLY_DEBOUNCE_SECONDS', 30),

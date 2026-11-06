@@ -132,3 +132,8 @@ CREATE TABLE IF NOT EXISTS kv (
   key text PRIMARY KEY,
   value jsonb NOT NULL
 );
+
+-- reintentos de envío y marca de "entrante ya atendido" (migraciones idempotentes)
+ALTER TABLE outbox ADD COLUMN IF NOT EXISTS attempts int NOT NULL DEFAULT 0;
+ALTER TABLE outbox ADD COLUMN IF NOT EXISTS last_error text;
+ALTER TABLE prospects ADD COLUMN IF NOT EXISTS inbound_handled_at timestamptz;

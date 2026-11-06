@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { loadConfig } from '../src/config.js';
 
-const base = { DATABASE_URL: 'postgres://x', OWNER_WA_ID: '5491100000000', HUB_PASSWORD: 'pw', DNC_MODE: 'off' };
+const base = { DATABASE_URL: 'postgres://x', OWNER_WA_ID: '5491155551234', HUB_PASSWORD: 'una-clave-larga', DNC_MODE: 'off' };
 
 describe('loadConfig', () => {
   it('defaults', () => {
@@ -40,5 +40,18 @@ describe('loadConfig', () => {
     expect(c.llm.vendedor).toEqual(['google:a', 'groq:b']);
     expect(c.llm.buscador).toEqual([]);
     expect(c.google).toEqual({ clientId: 'i', clientSecret: 's', refreshToken: 'r', calendarId: 'primary' });
+  });
+  it('rechaza contraseña del hub débil o de ejemplo', () => {
+    for (const pw of ['cambiame', 'corta', '123456789']) {
+      expect(() => loadConfig({ ...base, HUB_PASSWORD: pw })).toThrow(/HUB_PASSWORD/);
+    }
+    expect(loadConfig({ ...base, HUB_PASSWORD: '1234567890' }).hubPassword).toBe('1234567890');
+  });
+  it('rechaza OWNER_WA_ID inválido o de ejemplo', () => {
+    for (const id of ['5491100000000', '123456789', '5491155551234567', '+5491155551234', '54 9 11 5555 1234']) {
+      expect(() => loadConfig({ ...base, OWNER_WA_ID: id })).toThrow(/OWNER_WA_ID/);
+    }
+    expect(loadConfig({ ...base, OWNER_WA_ID: '5490000000001' }).ownerWaId).toBe('5490000000001');
+    expect(loadConfig({ ...base, OWNER_WA_ID: '1234567890' }).ownerWaId).toBe('1234567890');
   });
 });

@@ -20,11 +20,15 @@ beforeEach(async () => {
   vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-11-06T14:00:00Z') });
   db = await createMemoryDb();
   await migrate(db);
+  await repo.kvSet(db, 'wa_status', { state: 'conectado' });
   tr = createFakeTransport();
   gw = new WaGateway(db, tr, config);
 });
 
-afterEach(() => vi.useRealTimers());
+afterEach(async () => {
+  vi.useRealTimers();
+  await db.close();
+});
 
 const prospect = async (status: repo.Status = 'contactado', waId = P_WA) =>
   (await repo.insertProspect(db, { name: 'P', waId, status }))!;
@@ -87,11 +91,17 @@ describe('WaGateway.handleIncoming', () => {
     const p = await prospect();
     await gw.enqueueToProspect(p.id, 'hola');
     const orig = tr.send;
-    tr.onSend = (id) => { void gw.handleIncoming(msg({ fromMe: true, id, text: 'hola' })); };
+    let echo: Promise<unknown> | undefined;
+    tr.onSend = (id) => { echo = gw.handleIncoming(msg({ fromMe: true, id, text: 'hola' })); };
     // el envío tarda en resolver: el eco se procesa antes de que el gateway conozca el id
-    tr.send = async (w, t) => { const id = await orig(w, t); await new Promise((r) => setTimeout(r, 100)); return id; };
-    await gw.flushOutbox(WEEKDAY);
-    await new Promise((r) => setTimeout(r, 50));
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    tr.send = async (w, t) => { const id = await orig(w, t); await gate; return id; };
+    const flushing = gw.flushOutbox(WEEKDAY);
+    await vi.waitFor(() => expect(echo).toBeDefined(), { timeout: 10_000 });
+    release();
+    await flushing;
+    await echo;
     expect((await repo.getProspect(db, p.id))?.handedOff).toBe(false);
     expect((await repo.listMessages(db, p.id)).every((m) => m.author !== 'lauri')).toBe(true);
   });
@@ -151,7 +161,8 @@ describe('WaGateway.flushOutbox (robustez)', () => {
     let first = true;
     tr.send = ((w: string, t: string) => { if (first) { first = false; throw new Error('sync'); } return orig(w, t); }) as typeof tr.send;
     expect(await gw.flushOutbox(WEEKDAY)).toBe(1);
-    expect((await db.query<{ error: string }>('SELECT error FROM outbox WHERE id=$1', [a]))[0].error).toBe('sync');
+    expect((await db.query('SELECT status, last_error, attempts FROM outbox WHERE id=$1', [a]))[0])
+      .toMatchObject({ status: 'pendiente', last_error: 'sync', attempts: 1 });
   });
 });
 
@@ -207,7 +218,7 @@ describe('WaGateway.flushOutbox', () => {
     expect(tr.sent).toEqual([{ waId: OWNER, text: 'aviso' }]);
   });
 
-  it('error del transporte marca fallido y sigue con el resto', async () => {
+  it('error del transporte: queda pendiente con intentos, sigue con el resto y a los 5 queda fallido con evento', async () => {
     const p = await prospect();
     const a = await gw.enqueueToProspect(p.id, 'uno');
     await gw.enqueueToOwner('dos');
@@ -215,8 +226,86 @@ describe('WaGateway.flushOutbox', () => {
     const orig = tr.send;
     tr.send = async (w, t) => { if (first) { first = false; throw new Error('boom'); } return orig(w, t); };
     expect(await gw.flushOutbox(WEEKDAY)).toBe(1);
-    const row = (await db.query<{ status: string; error: string }>('SELECT status, error FROM outbox WHERE id=$1', [a]))[0];
-    expect(row).toMatchObject({ status: 'fallido', error: 'boom' });
+    const row = async () => (await db.query('SELECT status, error, last_error, attempts FROM outbox WHERE id=$1', [a]))[0];
+    expect(await row()).toMatchObject({ status: 'pendiente', last_error: 'boom', attempts: 1, error: null });
     expect(tr.sent).toEqual([{ waId: OWNER, text: 'dos' }]);
+    tr.send = async () => { throw new Error('boom'); };
+    for (let i = 2; i <= 4; i++) await gw.flushOutbox(WEEKDAY);
+    expect(await row()).toMatchObject({ status: 'pendiente', attempts: 4 });
+    expect((await repo.listEvents(db, 10)).some((e) => e.type === 'outbox_fallido')).toBe(false);
+    await gw.flushOutbox(WEEKDAY);
+    expect(await row()).toMatchObject({ status: 'fallido', attempts: 5, error: 'boom' });
+    const ev = (await repo.listEvents(db, 10)).filter((e) => e.type === 'outbox_fallido');
+    expect(ev).toHaveLength(1);
+    expect(ev[0].payload).toMatchObject({ outboxId: a, prospectId: p.id, intentos: 5, error: 'boom' });
+    await gw.flushOutbox(WEEKDAY); // ya no se reintenta
+    expect(await row()).toMatchObject({ attempts: 5 });
+  });
+
+  it('WhatsApp no conectado: no intenta nada y deja los items pendientes', async () => {
+    const p = await prospect();
+    const a = await gw.enqueueToProspect(p.id, 'uno');
+    await gw.enqueueToOwner('dos');
+    for (const state of ['desconectado', 'qr', 'conectando', 'sesion_cerrada']) {
+      await repo.kvSet(db, 'wa_status', { state });
+      expect(await gw.flushOutbox(WEEKDAY)).toBe(0);
+    }
+    expect(tr.sent).toEqual([]);
+    expect((await db.query('SELECT status, attempts FROM outbox WHERE id=$1', [a]))[0]).toMatchObject({ status: 'pendiente', attempts: 0 });
+    await repo.kvSet(db, 'wa_status', { state: 'conectado' });
+    expect(await gw.flushOutbox(WEEKDAY)).toBe(2);
+  });
+});
+
+describe('prospecto nunca contactado (encontrado)', () => {
+  it('mensaje entrante -> se guarda, handed_off y no dispara al agente', async () => {
+    const p = await prospect('encontrado');
+    expect(await gw.handleIncoming(msg())).toEqual({ prospectId: p.id, triggerAgent: false });
+    const cur = (await repo.getProspect(db, p.id))!;
+    expect(cur.handedOff).toBe(true);
+    expect(cur.lastInboundAt).toEqual(WEEKDAY);
+    expect(await repo.listMessages(db, p.id)).toMatchObject([{ direction: 'in', author: 'prospect', body: 'hola' }]);
+  });
+
+  it('mensaje propio (fromMe) -> handed_off', async () => {
+    const p = await prospect('encontrado');
+    expect(await gw.handleIncoming(msg({ fromMe: true, id: 'yo-1' }))).toEqual({ prospectId: p.id, triggerAgent: false });
+    expect((await repo.getProspect(db, p.id))!.handedOff).toBe(true);
+  });
+});
+
+describe('mensajes que no son texto', () => {
+  it('audio del prospecto -> se guarda, no dispara al agente, escala al dueño con needs_attention', async () => {
+    const p = await prospect();
+    expect(await gw.handleIncoming(msg({ text: '[audio]', media: 'audio' }))).toEqual({ prospectId: p.id, triggerAgent: false });
+    expect(await repo.listMessages(db, p.id)).toMatchObject([{ direction: 'in', author: 'prospect', body: '[audio]' }]);
+    const cur = (await repo.getProspect(db, p.id))!;
+    expect(cur.needsAttention).toBe('pregunta');
+    expect(cur.lastInboundAt).toEqual(WEEKDAY);
+    expect((await repo.listOpenEscalations(db)).map((e) => e.question)).toEqual(['Te mandó un audio, escuchalo en el celular']);
+    const self = await db.query<{ body: string; to_wa_id: string }>("SELECT body, to_wa_id FROM outbox WHERE kind='self'");
+    expect(self).toEqual([{ body: '❓ P te mandó un audio, escuchalo en el celular y respondé en el hub', to_wa_id: OWNER }]);
+  });
+
+  it('imagen -> "mirala"; reentrega no duplica la escalación', async () => {
+    await prospect();
+    await gw.handleIncoming(msg({ text: '[imagen]', media: 'imagen' }));
+    expect(await gw.handleIncoming(msg({ text: '[imagen]', media: 'imagen' }))).toBeNull();
+    expect((await repo.listOpenEscalations(db)).map((e) => e.question)).toEqual(['Te mandó una imagen, mirala en el celular']);
+  });
+
+  it('no texto de prospecto en baja o tomado -> solo se guarda', async () => {
+    const p = await prospect('baja');
+    expect(await gw.handleIncoming(msg({ text: '[audio]', media: 'audio' }))).toEqual({ prospectId: p.id, triggerAgent: false });
+    expect(await repo.listOpenEscalations(db)).toHaveLength(0);
+  });
+
+  it('no texto propio (fromMe) -> toma de control igual que el texto', async () => {
+    const p = await prospect();
+    expect(await gw.handleIncoming(msg({ fromMe: true, id: 'yo-audio', text: '[audio]', media: 'audio' })))
+      .toEqual({ prospectId: p.id, triggerAgent: false });
+    expect((await repo.getProspect(db, p.id))!.handedOff).toBe(true);
+    expect(await repo.listMessages(db, p.id)).toMatchObject([{ author: 'lauri', body: '[audio]' }]);
+    expect(await repo.listOpenEscalations(db)).toHaveLength(0);
   });
 });

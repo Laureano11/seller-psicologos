@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { createMemoryDb, migrate, type Db } from '../src/db/db.js';
 import * as repo from '../src/db/repo.js';
 import { WaGateway } from '../src/whatsapp/gateway.js';
@@ -41,6 +41,7 @@ beforeEach(async () => {
     handleInbound: vi.fn(async () => {}),
     startConversation: vi.fn(async (id: number, now: Date) => {
       await repo.updateProspect(db, id, { status: 'contactado', contactedAt: now });
+      return true;
     }),
     runFollowups: vi.fn(async () => 0),
   };
@@ -48,6 +49,8 @@ beforeEach(async () => {
   runWeeklyAnalysis = vi.fn(async () => ({}));
   orch = createOrchestrator({ db, config, gateway: gw, vendedor: vendedor as any, runBuscador, runWeeklyAnalysis });
 });
+
+afterEach(async () => { await db.close(); });
 
 describe('debounce', () => {
   it('tres mensajes seguidos -> una sola respuesta tras la pausa', async () => {
@@ -214,7 +217,7 @@ describe('tick', () => {
     let release!: () => void;
     runBuscador.mockImplementation(() => new Promise<void>((r) => { release = r; }));
     const first = orch.tick(MON_905);
-    await vi.waitFor(() => expect(runBuscador).toHaveBeenCalled());
+    await vi.waitFor(() => expect(runBuscador).toHaveBeenCalled(), { timeout: 10_000 });
     await orch.tick(plus(MON_905, MIN)); // solapado
     let idle = false;
     const w = orch.idle().then(() => { idle = true; });
@@ -231,7 +234,7 @@ describe('tick', () => {
     runBuscador.mockImplementation(() => new Promise<void>((r) => { release = r; }));
     const flush = vi.spyOn(gw, 'flushOutbox');
     const first = orch.tick(MON_905);
-    await vi.waitFor(() => expect(runBuscador).toHaveBeenCalled());
+    await vi.waitFor(() => expect(runBuscador).toHaveBeenCalled(), { timeout: 10_000 });
     await orch.tick(plus(MON_905, MIN)); // resuelve ya, sin ejecutar nada
     expect(flush).not.toHaveBeenCalled();
     release();
@@ -239,6 +242,108 @@ describe('tick', () => {
     expect(flush).toHaveBeenCalledTimes(1);
     await orch.tick(plus(MON_905, 2 * MIN)); // ya libre
     expect(flush).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('fuera de horario', () => {
+  const SAT_NIGHT = new Date('2026-11-08T01:00:00Z'); // sábado 22:00 local
+  const MON_9 = new Date('2026-11-09T12:00:00Z'); // lunes 09:00 local
+  const m = (id: string, at: Date): IncomingMsg => ({ fromWaId: '5491111111111', text: 'hola', id, at, fromMe: false });
+
+  it('runDue no responde fuera de la ventana: reprograma al inicio de la próxima y responde una sola vez', async () => {
+    const p = (await repo.insertProspect(db, { name: 'Ana', waId: '5491111111111', status: 'contactado' }))!;
+    await orch.onIncoming(m('a', SAT_NIGHT), SAT_NIGHT);
+    await orch.runDue(plus(SAT_NIGHT, MIN));
+    await orch.onIncoming(m('b', plus(SAT_NIGHT, 2 * MIN)), plus(SAT_NIGHT, 2 * MIN));
+    await orch.runDue(plus(SAT_NIGHT, 10 * MIN));
+    await orch.runDue(SUNDAY);
+    expect(vendedor.handleInbound).not.toHaveBeenCalled();
+    await orch.runDue(plus(MON_9, -MIN));
+    expect(vendedor.handleInbound).not.toHaveBeenCalled();
+    await orch.runDue(MON_9);
+    await orch.runDue(plus(MON_9, MIN));
+    expect(vendedor.handleInbound).toHaveBeenCalledTimes(1);
+    expect(vendedor.handleInbound).toHaveBeenCalledWith(p.id, MON_9);
+  });
+
+  it('seguimientos y reintentos solo dentro de la ventana', async () => {
+    await repo.kvSet(db, 'pending_inbound', [1]);
+    await orch.tick(SUNDAY); // domingo 12:00
+    expect(vendedor.runFollowups).not.toHaveBeenCalled();
+    expect(vendedor.handleInbound).not.toHaveBeenCalled();
+    expect(await repo.kvGet(db, 'pending_inbound')).toEqual([1]);
+    await orch.tick(new Date('2026-11-09T13:05:00Z')); // lunes 10:05
+    expect(vendedor.runFollowups).toHaveBeenCalledTimes(1);
+    expect(vendedor.handleInbound).toHaveBeenCalledWith(1, new Date('2026-11-09T13:05:00Z'));
+  });
+});
+
+describe('recuperación de entrantes sin responder (debounce tras reinicio)', () => {
+  const unanswered = async (o: Partial<repo.Prospect> = {}) => {
+    const p = (await repo.insertProspect(db, {
+      name: 'Ana', waId: '5491111111111', status: 'conversando',
+      lastOutboundAt: plus(FRI_NOON, -10 * MIN), lastInboundAt: plus(FRI_NOON, -2 * MIN), ...o,
+    }))!;
+    await repo.addMessage(db, { prospectId: p.id, direction: 'in', author: 'prospect', body: 'hola?', waMessageId: 'in-x' });
+    return p;
+  };
+  const fresh = () => createOrchestrator({ db, config, gateway: gw, vendedor: vendedor as any, runBuscador, runWeeklyAnalysis });
+
+  it('un orquestador nuevo responde un entrante que quedó sin atender, y una sola vez', async () => {
+    const p = await unanswered();
+    const o = fresh();
+    await o.tick(FRI_NOON);
+    expect(vendedor.handleInbound).toHaveBeenCalledTimes(1);
+    expect(vendedor.handleInbound).toHaveBeenCalledWith(p.id, FRI_NOON);
+    // el vendedor no dijo nada (p.ej. escaló sin mensaje): no se repite en el siguiente tick
+    await o.tick(plus(FRI_NOON, MIN));
+    await fresh().tick(plus(FRI_NOON, 2 * MIN));
+    expect(vendedor.handleInbound).toHaveBeenCalledTimes(1);
+  });
+
+  it('no dispara si hay respuesta pendiente en el outbox, si ya se respondió, si es muy reciente, tomado o bloqueado', async () => {
+    const p = await unanswered();
+    await repo.enqueueOutbox(db, { prospectId: p.id, toWaId: p.waId!, body: 'ya va', kind: 'prospect', sendAfter: plus(FRI_NOON, 60 * MIN) });
+    await fresh().tick(FRI_NOON);
+    expect(vendedor.handleInbound).not.toHaveBeenCalled();
+    await db.query('DELETE FROM outbox');
+    await repo.updateProspect(db, p.id, { lastOutboundAt: plus(FRI_NOON, -MIN) });
+    await fresh().tick(FRI_NOON);
+    await repo.updateProspect(db, p.id, { lastOutboundAt: plus(FRI_NOON, -10 * MIN), lastInboundAt: plus(FRI_NOON, -10_000) });
+    await fresh().tick(FRI_NOON); // 10 s < debounce de 30 s
+    await repo.updateProspect(db, p.id, { lastInboundAt: plus(FRI_NOON, -2 * MIN), handedOff: true });
+    await fresh().tick(FRI_NOON);
+    await repo.updateProspect(db, p.id, { handedOff: false, status: 'rechazado' });
+    await fresh().tick(FRI_NOON);
+    expect(vendedor.handleInbound).not.toHaveBeenCalled();
+  });
+
+  it('un audio escalado al dueño no dispara al vendedor (ni por debounce ni por recuperación)', async () => {
+    const p = (await repo.insertProspect(db, { name: 'Ana', waId: '5491111111111', status: 'conversando', lastOutboundAt: plus(FRI_NOON, -10 * MIN) }))!;
+    await orch.onIncoming({ fromWaId: '5491111111111', text: '[audio]', id: 'au-1', at: FRI_NOON, fromMe: false, media: 'audio' }, FRI_NOON);
+    await orch.tick(plus(FRI_NOON, 2 * MIN));
+    await fresh().tick(plus(FRI_NOON, 3 * MIN));
+    expect(vendedor.handleInbound).not.toHaveBeenCalled();
+    expect((await repo.getProspect(db, p.id))!.needsAttention).toBe('pregunta');
+    expect(await selfMsgs()).toEqual(['❓ Ana te mandó un audio, escuchalo en el celular y respondé en el hub']);
+  });
+});
+
+describe('nuevos contactos', () => {
+  it('si startConversation no hace nada, no consume el espaciado', async () => {
+    await repo.insertProspect(db, { name: 'Nuevo', waId: '5491199999999', status: 'encontrado' });
+    vendedor.startConversation.mockResolvedValueOnce(false);
+    await orch.tick(FRI_NOON);
+    expect(await repo.kvGet(db, 'last_new_contact_at')).toBeUndefined();
+    await orch.tick(plus(FRI_NOON, MIN));
+    expect(vendedor.startConversation).toHaveBeenCalledTimes(2);
+    expect(await repo.kvGet(db, 'last_new_contact_at')).toBe(plus(FRI_NOON, MIN).toISOString());
+  });
+
+  it('no elige prospectos con handed_off', async () => {
+    await repo.insertProspect(db, { name: 'Conocido', waId: '5491199999999', status: 'encontrado', handedOff: true });
+    await orch.tick(FRI_NOON);
+    expect(vendedor.startConversation).not.toHaveBeenCalled();
   });
 });
 

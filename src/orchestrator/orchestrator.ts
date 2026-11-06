@@ -4,8 +4,11 @@ import type { Config } from '../config.js';
 import type { WaGateway } from '../whatsapp/gateway.js';
 import type { IncomingMsg, WaStatus } from '../whatsapp/transport.js';
 import type { createVendedor } from '../agents/vendedor/vendedor.js';
-import { countContactedSince, countOptOutsSince, kvGet, kvSet, logEvent, pickContactable } from '../db/repo.js';
-import { isInWindow } from '../time.js';
+import {
+  countContactedSince, countOptOutsSince, getProspect, kvGet, kvSet, listUnansweredInbound, logEvent, pickContactable,
+  updateProspect,
+} from '../db/repo.js';
+import { isInWindow, nextSendTime } from '../time.js';
 
 export interface OrchestratorDeps {
   db: Db;
@@ -56,19 +59,40 @@ export function createOrchestrator(deps: OrchestratorDeps) {
     }
   }
 
+  /** Llama al vendedor y marca el último entrante como atendido (para que la recuperación no lo repita). */
+  async function respond(prospectId: number, now: Date): Promise<void> {
+    const before = await getProspect(db, prospectId);
+    await vendedor.handleInbound(prospectId, now);
+    if (before?.lastInboundAt) await updateProspect(db, prospectId, { inboundHandledAt: before.lastInboundAt });
+  }
+
   async function runDue(now: Date): Promise<void> {
     const due = [...dueAt.entries()].filter(([, at]) => at.getTime() <= now.getTime());
+    if (due.length && !isInWindow(now, config.sendWindow, config.tz)) {
+      // fuera de horario no se responde: se reprograma al inicio de la próxima ventana (una sola respuesta)
+      const next = nextSendTime(now, config.sendWindow, config.tz);
+      for (const [prospectId] of due) dueAt.set(prospectId, next);
+      return;
+    }
     const errors: string[] = [];
     for (const [prospectId] of due) {
       dueAt.delete(prospectId);
       try {
-        await vendedor.handleInbound(prospectId, now);
+        await respond(prospectId, now);
       } catch (e) {
         errors.push(errMsg(e));
         await safeAddPending(prospectId); // no se pierde la respuesta: la reintenta el paso de reintentos
       }
     }
     if (errors.length) throw new Error(errors.join('; '));
+  }
+
+  /** El debounce vive en memoria: tras un reinicio, recupera entrantes sin responder desde la base. */
+  async function recoverUnanswered(now: Date): Promise<void> {
+    const ids = await listUnansweredInbound(db, new Date(now.getTime() - config.replyDebounceSeconds * 1000));
+    if (!ids.length) return;
+    const pending = (await kvGet<number[]>(db, 'pending_inbound')) ?? [];
+    for (const id of ids) if (!dueAt.has(id) && !pending.includes(id)) dueAt.set(id, now);
   }
 
   async function step(paso: string, fn: () => Promise<void>, opts: { now?: Date; backoff?: boolean } = {}): Promise<void> {
@@ -113,6 +137,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
       const dt = local(now);
       const today = dt.toISODate()!;
 
+      await step('recuperar', () => recoverUnanswered(now));
       await step('responder', () => runDue(now));
 
       await step('buscador', async () => {
@@ -138,17 +163,19 @@ export function createOrchestrator(deps: OrchestratorDeps) {
         if (last && now.getTime() - new Date(last).getTime() < NEW_CONTACT_SPACING_MS) return;
         const [p] = await pickContactable(db, 1);
         if (!p) return;
-        await vendedor.startConversation(p.id, now);
-        await kvSet(db, 'last_new_contact_at', now.toISOString());
+        // si no encoló nada (no-op), no consume el espaciado de 30 min
+        if (await vendedor.startConversation(p.id, now)) await kvSet(db, 'last_new_contact_at', now.toISOString());
       });
 
       await step('seguimientos', async () => {
+        if (!isInWindow(now, config.sendWindow, config.tz)) return;
         if (dt.hour < 10 || (await kvGet<string>(db, 'followups_last_date')) === today) return;
         await vendedor.runFollowups(now);
         await kvSet(db, 'followups_last_date', today);
       }, { now, backoff: true });
 
       await step('reintentos', async () => {
+        if (!isInWindow(now, config.sendWindow, config.tz)) return; // igual que runDue: fuera de horario no se responde
         const pending = (await kvGet<number[]>(db, 'pending_inbound')) ?? [];
         const batch = pending.slice(0, MAX_RETRIES_PER_TICK);
         if (!batch.length) return;
@@ -157,7 +184,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
         const errors: string[] = [];
         for (const id of batch) {
           try {
-            await vendedor.handleInbound(id, now);
+            await respond(id, now);
           } catch (e) {
             errors.push(errMsg(e));
             await safeAddPending(id);

@@ -1,11 +1,25 @@
 import type { Db } from '../db/db.js';
 import type { Config } from '../config.js';
 import {
-  BLOCKED_STATUSES, addMessage, dueOutbox, enqueueOutbox, getProspect, getProspectByWaId,
-  isOptedOut, isSystemWaMessageId, markOutboxFailed, markOutboxSent, updateProspect,
+  BLOCKED_STATUSES, addMessage, createEscalation, dueOutbox, enqueueOutbox, getProspect, getProspectByWaId,
+  isOptedOut, isSystemWaMessageId, kvGet, logEvent, markOutboxFailed, markOutboxSent, recordOutboxAttemptFailed,
+  updateProspect,
 } from '../db/repo.js';
 import { isInWindow } from '../time.js';
-import type { IncomingMsg, WaTransport } from './transport.js';
+import type { IncomingMsg, MediaKind, WaTransport } from './transport.js';
+
+/** Intentos de envío antes de dar un item del outbox por fallido. */
+export const MAX_SEND_ATTEMPTS = 5;
+
+/** Cómo se le avisa al dueño de un mensaje que el agente no puede leer. */
+const MEDIA_ASK: Record<MediaKind, string> = {
+  audio: 'un audio, escuchalo',
+  imagen: 'una imagen, mirala',
+  sticker: 'un sticker, miralo',
+  documento: 'un documento, miralo',
+  video: 'un video, miralo',
+  no_soportado: 'un mensaje que no puedo leer, miralo',
+};
 
 type SentRecord = { waMessageId: string; prospectId: number | null; body: string; marked: boolean; logged: boolean };
 
@@ -37,8 +51,22 @@ export class WaGateway {
 
     const inserted = await addMessage(this.db, { prospectId: p.id, direction: 'in', author: 'prospect', body: m.text, waMessageId: m.id });
     if (!inserted) return null; // reentrega de Baileys
+    if (p.status === 'encontrado' && !p.handedOff) {
+      // el sistema nunca le escribió: es una relación previa de Lauri, no se toca
+      await updateProspect(this.db, p.id, { lastInboundAt: m.at, handedOff: true });
+      return { prospectId: p.id, triggerAgent: false };
+    }
+    const active = !p.handedOff && !BLOCKED_STATUSES.includes(p.status);
+    if (m.media && active) {
+      // el agente no puede escuchar/ver: se escala al dueño sin llamar al modelo
+      const question = `Te mandó ${MEDIA_ASK[m.media]} en el celular`;
+      await updateProspect(this.db, p.id, { lastInboundAt: m.at, inboundHandledAt: m.at, needsAttention: 'pregunta' });
+      await createEscalation(this.db, p.id, question);
+      await this.enqueueToOwner(`❓ ${p.name} te mandó ${MEDIA_ASK[m.media]} en el celular y respondé en el hub`);
+      return { prospectId: p.id, triggerAgent: false };
+    }
     await updateProspect(this.db, p.id, { lastInboundAt: m.at });
-    return { prospectId: p.id, triggerAgent: !p.handedOff && !BLOCKED_STATUSES.includes(p.status) };
+    return { prospectId: p.id, triggerAgent: active };
   }
 
   async enqueueToProspect(prospectId: number, body: string, opts?: { sendAfter?: Date }): Promise<number> {
@@ -56,6 +84,8 @@ export class WaGateway {
   }
 
   async flushOutbox(now: Date): Promise<number> {
+    // sin conexión no se intenta nada: los items quedan pendientes hasta que vuelva
+    if ((await kvGet<{ state: string }>(this.db, 'wa_status'))?.state !== 'conectado') return 0;
     let sent = 0;
     for (const item of await dueOutbox(this.db, now)) {
       const done = this.sentOutbox.get(item.id);
@@ -91,7 +121,11 @@ export class WaGateway {
       try {
         waMessageId = await op;
       } catch (e) {
-        await markOutboxFailed(this.db, item.id, e instanceof Error ? e.message : String(e));
+        const error = e instanceof Error ? e.message : String(e);
+        const row = await recordOutboxAttemptFailed(this.db, item.id, error, MAX_SEND_ATTEMPTS);
+        if (row.status === 'fallido') {
+          await logEvent(this.db, 'outbox_fallido', { outboxId: item.id, prospectId: item.prospectId, kind: item.kind, intentos: row.attempts, error });
+        }
         continue;
       }
       sent++;

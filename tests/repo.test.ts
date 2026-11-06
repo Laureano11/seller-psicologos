@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +11,8 @@ beforeEach(async () => {
   db = await createMemoryDb();
   await migrate(db);
 });
+
+afterEach(async () => { await db.close(); });
 
 const mk = (name: string, waId: string | null) => repo.insertProspect(db, { name, waId, phoneRaw: waId ?? undefined, email: 'a@b.c' });
 
