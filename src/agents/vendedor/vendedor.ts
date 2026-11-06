@@ -5,12 +5,12 @@ import { AllProvidersFailedError } from '../../llm/llm.js';
 import type { WaGateway } from '../../whatsapp/gateway.js';
 import {
   BLOCKED_STATUSES, addFaq, addMeeting, answerEscalationRow, applyOptOut, createEscalation, getEscalation,
-  getProspect, kvGet, kvSet, listMessages, listProspectsForHub, listVariants, logEvent, setStatus, updateProspect,
+  getProspect, isOptedOut, kvGet, kvSet, listMessages, listProspectsForHub, listVariants, logEvent, setStatus, updateProspect,
   type Prospect,
 } from '../../db/repo.js';
 import type { CalendarService, MailService } from '../agenda/google.js';
 import { formatSlot, proposeSlots } from '../agenda/slots.js';
-import { VendedorDecision, buildSystemPrompt, prospectCard } from './decision.js';
+import { VendedorDecision, buildSystemPrompt, buildTextPrompt, prospectCard } from './decision.js';
 import { loadKnowledge } from './knowledge.js';
 
 export interface VendedorDeps {
@@ -51,7 +51,7 @@ export function createVendedor(deps: VendedorDeps) {
 
   async function startConversation(prospectId: number, now: Date): Promise<void> {
     const p = await getProspect(db, prospectId);
-    if (!p) return;
+    if (!p || p.status !== 'encontrado' || p.handedOff || (p.waId && (await isOptedOut(db, p.waId)))) return;
     const k = await loadKnowledge(db);
     const variant = await pickOpenerVariant();
     const text = await llm.text({
@@ -62,6 +62,7 @@ export function createVendedor(deps: VendedorDeps) {
         content: `Ficha del prospecto:\n${prospectCard(p)}\n\nPlantilla de apertura (adaptala a la persona, manteniendo la idea):\n${variant.template}\n\nEscribí solo el mensaje.`,
       }],
     });
+    if (!text.trim()) return;
     await say(prospectId, text);
     await updateProspect(db, prospectId, { status: 'contactado', contactedAt: now, openerVariantId: variant.id });
   }
@@ -89,7 +90,7 @@ export function createVendedor(deps: VendedorDeps) {
       const k = await loadKnowledge(db);
       d = await llm.object({
         agent: 'vendedor',
-        system: buildSystemPrompt(k, p, config.ownerName),
+        system: buildSystemPrompt(k, p, config.ownerName, { now, tz: config.tz }),
         messages: await history(prospectId),
         schema: VendedorDecision,
       });
@@ -128,6 +129,10 @@ export function createVendedor(deps: VendedorDeps) {
           break;
         }
         const slots = await proposeSlots(calendar, now, config);
+        if (slots.length === 0) {
+          await escalate(p, 'Quiere una reunión pero no hay horarios libres', d.message);
+          break;
+        }
         attrs.offered_slots = slots.map((s) => s.toISOString());
         const list = slots.map((s) => `- ${formatSlot(s, config.tz)}`).join('\n');
         await say(p.id, `${d.message?.trim() || 'Te propongo estos horarios:'}\n${list}`);
@@ -151,23 +156,26 @@ export function createVendedor(deps: VendedorDeps) {
           const { eventId, meetLink } = await calendar.createMeeting({ start, end, email, name: p.name });
           await addMeeting(db, { prospectId: p.id, startsAt: start, endsAt: end, calendarEventId: eventId, meetUrl: meetLink });
           const fecha = formatSlot(start, config.tz);
-          await mail?.send({
-            to: email,
-            subject: `Reunión confirmada — ${fecha}`,
-            text: `Hola ${p.name}, quedó confirmada nuestra reunión: ${fecha}.${meetLink ? `\nLink: ${meetLink}` : ''}\n\n${config.ownerName}`,
-          });
-          await say(p.id, d.message);
+          try {
+            await mail?.send({
+              to: email,
+              subject: `Reunión confirmada — ${fecha}`,
+              text: `Hola ${p.name}, quedó confirmada nuestra reunión: ${fecha}.${meetLink ? `\nLink: ${meetLink}` : ''}\n\n${config.ownerName}`,
+            });
+          } catch (e) {
+            await logEvent(db, 'mail_error', { prospectId: p.id, error: e instanceof Error ? e.message : String(e) });
+          }
+          delete attrs.offered_slots;
+          await say(p.id, d.message?.trim() || `¡Listo! Te agendé para el ${fecha}. Te llega la invitación por mail.`);
           status = 'reunion_agendada';
           await gateway.enqueueToOwner(`📅 Reunión con ${p.name}: ${fecha}`);
         }
         break;
       }
       case 'baja':
-        await say(p.id, d.message);
         optOut = true;
         break;
       case 'rechazo':
-        await say(p.id, d.message);
         status = 'rechazado';
         break;
     }
@@ -189,19 +197,22 @@ export function createVendedor(deps: VendedorDeps) {
   async function answerEscalation(escalationId: number, answer: string): Promise<void> {
     const esc = await getEscalation(db, escalationId);
     if (!esc) return;
+    const p = await getProspect(db, esc.prospectId);
+    let text = '';
+    if (p) {
+      const k = await loadKnowledge(db);
+      text = await llm.text({
+        agent: 'vendedor',
+        system: buildTextPrompt(k, p, config.ownerName),
+        messages: [
+          ...(await history(p.id)),
+          { role: 'user', content: `[Instrucción interna] ${config.ownerName} respondió tu consulta "${esc.question}": "${answer}". Redactá la respuesta para el prospecto, en el estilo de ${config.ownerName}. Solo el mensaje.` },
+        ],
+      });
+    }
     await answerEscalationRow(db, escalationId, answer);
     await addFaq(db, esc.question, answer);
-    const p = await getProspect(db, esc.prospectId);
     if (!p) return;
-    const k = await loadKnowledge(db);
-    const text = await llm.text({
-      agent: 'vendedor',
-      system: buildSystemPrompt(k, p, config.ownerName),
-      messages: [
-        ...(await history(p.id)),
-        { role: 'user', content: `[Instrucción interna] ${config.ownerName} respondió tu consulta "${esc.question}": "${answer}". Redactá la respuesta para el prospecto, en el estilo de ${config.ownerName}. Solo el mensaje.` },
-      ],
-    });
     await say(p.id, text);
     await updateProspect(db, p.id, { needsAttention: null });
   }
@@ -213,15 +224,22 @@ export function createVendedor(deps: VendedorDeps) {
       const elapsed = now.getTime() - p.lastOutboundAt.getTime();
       if (p.followupsSent < config.maxFollowups) {
         if (elapsed < config.followupDays * DAY_MS) continue;
-        const k = await loadKnowledge(db);
-        const text = await llm.text({
-          agent: 'vendedor',
-          system: buildSystemPrompt(k, p, config.ownerName),
-          messages: [
-            ...(await history(p.id)),
-            { role: 'user', content: '[Instrucción interna] No respondió. Escribí un seguimiento muy breve, amable y sin presionar. Solo el mensaje.' },
-          ],
-        });
+        let text: string;
+        try {
+          const k = await loadKnowledge(db);
+          text = await llm.text({
+            agent: 'vendedor',
+            system: buildTextPrompt(k, p, config.ownerName),
+            messages: [
+              ...(await history(p.id)),
+              { role: 'user', content: '[Instrucción interna] No respondió. Escribí un seguimiento muy breve, amable y sin presionar. Solo el mensaje.' },
+            ],
+          });
+        } catch (e) {
+          await logEvent(db, 'followup_error', { prospectId: p.id, error: e instanceof Error ? e.message : String(e) });
+          continue;
+        }
+        if (!text.trim()) continue;
         await say(p.id, text);
         await updateProspect(db, p.id, { followupsSent: p.followupsSent + 1 });
         sent++;

@@ -154,6 +154,33 @@ describe('handleInbound', () => {
       expect((await toProspect())[0].body).toContain('mail');
     });
 
+    it('el system prompt incluye los ISO ofrecidos y la fecha de hoy', async () => {
+      const p = await prospect({ attributes: { offered_slots: [offered] } });
+      let system = '';
+      await make(createFakeLlm((a) => { system = a.system; return decision({}); })).handleInbound(p.id, NOW);
+      expect(system).toContain(offered);
+      expect(system).toContain('lunes 9/11 a las 10:00');
+      expect(system).toContain('viernes 6/11/2026');
+    });
+
+    it('mail que falla no impide la reunión; limpia offered_slots y usa mensaje de respaldo', async () => {
+      mail = { send: async () => { throw new Error('smtp'); } };
+      const p = await prospect({ attributes: { offered_slots: [offered] } });
+      await make(fakeObj(decision({ action: 'agendar_reunion', meeting: { slotIso: offered, email: 'a@b.com' } }))).handleInbound(p.id, NOW);
+      const u = (await repo.getProspect(db, p.id))!;
+      expect(u.status).toBe('reunion_agendada');
+      expect(u.attributes.offered_slots).toBeUndefined();
+      expect((await toProspect())[0].body).toBe('¡Listo! Te agendé para el lunes 9/11 a las 10:00. Te llega la invitación por mail.');
+      expect((await toSelf())).toHaveLength(1);
+    });
+
+    it('sin horarios libres -> escala', async () => {
+      calendar = { ...calendar, busy: async (from, to) => [{ start: new Date(from.getTime() - 1e12), end: new Date(to.getTime() + 1e12) }] };
+      const p = await prospect();
+      await make(fakeObj(decision({ action: 'ofrecer_reunion', message: 'dale' }))).handleInbound(p.id, NOW);
+      expect((await repo.listOpenEscalations(db))[0].question).toBe('Quiere una reunión pero no hay horarios libres');
+    });
+
     it('slot ofrecido + email -> reunión, mail, status y aviso', async () => {
       const p = await prospect({ attributes: { offered_slots: [offered] } });
       await make(fakeObj(decision({ action: 'agendar_reunion', message: 'Listo!', meeting: { slotIso: offered, email: 'a@b.com' } }))).handleInbound(p.id, NOW);
@@ -166,16 +193,18 @@ describe('handleInbound', () => {
     });
   });
 
-  it('baja -> opt-out', async () => {
+  it('baja -> opt-out y nada al prospecto aunque el modelo devuelva mensaje', async () => {
     const p = await prospect();
     await make(fakeObj(decision({ action: 'baja', message: 'Perdón!' }))).handleInbound(p.id, NOW);
     expect(await repo.isOptedOut(db, '5491111111111')).toBe(true);
+    expect(await toProspect()).toHaveLength(0);
   });
 
   it('rechazo -> rechazado', async () => {
     const p = await prospect();
     await make(fakeObj(decision({ action: 'rechazo', message: 'Gracias' }))).handleInbound(p.id, NOW);
     expect((await repo.getProspect(db, p.id))?.status).toBe('rechazado');
+    expect(await toProspect()).toHaveLength(0);
   });
 
   it('AllProvidersFailedError -> nada en outbox y queda pendiente (sin duplicar)', async () => {
@@ -200,7 +229,45 @@ describe('answerEscalation', () => {
   });
 });
 
+describe('answerEscalation con fallo del modelo', () => {
+  it('relanza y deja la escalación abierta', async () => {
+    const p = await prospect({ needsAttention: 'pregunta' });
+    const id = await repo.createEscalation(db, p.id, '¿Cuánto sale?');
+    const v = make(createFakeLlm(() => { throw new AllProvidersFailedError('x', []); }));
+    await expect(v.answerEscalation(id, '10 lucas')).rejects.toBeInstanceOf(AllProvidersFailedError);
+    expect((await repo.getEscalation(db, id))?.status).toBe('abierta');
+    expect(await repo.listFaq(db)).toHaveLength(0);
+    expect((await repo.getProspect(db, p.id))?.needsAttention).toBe('pregunta');
+  });
+});
+
+describe('startConversation guards', () => {
+  it('no hace nada si no está encontrado', async () => {
+    await repo.addVariant(db, 'Hola', 'activa');
+    const p = await prospect({ status: 'conversando' });
+    await make(createFakeLlm(() => 'Hola')).startConversation(p.id, NOW);
+    expect(await outbox()).toHaveLength(0);
+  });
+  it('texto vacío no marca contactado', async () => {
+    await repo.addVariant(db, 'Hola', 'activa');
+    const p = await prospect({ status: 'encontrado' });
+    await make(createFakeLlm(() => '  ')).startConversation(p.id, NOW);
+    expect((await repo.getProspect(db, p.id))?.status).toBe('encontrado');
+  });
+});
+
 describe('runFollowups', () => {
+  it('un fallo del modelo no frena a los demás', async () => {
+    const old = new Date(NOW.getTime() - 4 * DAY);
+    const a = await prospect({ lastOutboundAt: old });
+    const b = await prospect({ waId: '5491122222222', lastOutboundAt: old });
+    let n = 0;
+    const sentN = await make(createFakeLlm(() => { if (n++ === 0) throw new Error('boom'); return 'seguimos'; })).runFollowups(NOW);
+    expect(sentN).toBe(1);
+    expect(await toProspect()).toHaveLength(1);
+    expect([a.id, b.id]).toHaveLength(2);
+  });
+
   it('contactado hace 4 días sin respuesta -> 1 seguimiento', async () => {
     const p = await prospect({ lastOutboundAt: new Date(NOW.getTime() - 4 * DAY) });
     const n = await make(createFakeLlm(() => '¿Pudiste verlo?')).runFollowups(NOW);
