@@ -1,0 +1,89 @@
+import { parseWindow, type Window } from './time.js';
+
+export type Config = {
+  databaseUrl: string;
+  tz: string;
+  dailyNewContacts: number;
+  sendWindow: Window;
+  meetingWindow: Window;
+  meetingMinutes: number;
+  searchHour: number;
+  buscadorMaxPerDay: number;
+  followupDays: number;
+  closeAfterDays: number;
+  maxFollowups: number;
+  abMinPerVariant: number;
+  ownerWaId: string;
+  ownerName: string;
+  dncMode: 'file' | 'off';
+  dncFile?: string;
+  llm: { buscador: string[]; vendedor: string[]; analista: string[] };
+  googlePlacesKey?: string;
+  google?: { clientId: string; clientSecret: string; refreshToken: string; calendarId: string };
+  hubUser: string;
+  hubPassword: string;
+  contentDir: string;
+  waAuthDir: string;
+  replyDebounceSeconds: number;
+};
+
+type Env = Record<string, string | undefined>;
+
+const list = (v: string | undefined) => (v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+
+export function loadConfig(env: Env): Config {
+  const req = (k: string): string => {
+    const v = env[k]?.trim();
+    if (!v) throw new Error(`Falta la variable de entorno ${k}`);
+    return v;
+  };
+  const num = (k: string, def: number): number => {
+    const v = env[k]?.trim();
+    if (!v) return def;
+    const n = Number(v);
+    if (!Number.isFinite(n)) throw new Error(`${k} debe ser numérico (recibido "${v}")`);
+    return n;
+  };
+
+  const dncMode = (env.DNC_MODE?.trim() || 'file') as string;
+  if (dncMode !== 'file' && dncMode !== 'off') throw new Error(`DNC_MODE debe ser "file" u "off" (recibido "${dncMode}")`);
+  const dncFile = env.DNC_FILE?.trim() || undefined;
+  if (dncMode === 'file' && !dncFile) throw new Error('DNC_MODE=file requiere DNC_FILE');
+
+  const google =
+    env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.GOOGLE_REFRESH_TOKEN
+      ? {
+          clientId: env.GOOGLE_CLIENT_ID,
+          clientSecret: env.GOOGLE_CLIENT_SECRET,
+          refreshToken: env.GOOGLE_REFRESH_TOKEN,
+          calendarId: env.GOOGLE_CALENDAR_ID?.trim() || 'primary',
+        }
+      : undefined;
+
+  return {
+    databaseUrl: req('DATABASE_URL'),
+    tz: env.TZ?.trim() || 'America/Argentina/Buenos_Aires',
+    dailyNewContacts: num('DAILY_NEW_CONTACTS', 5),
+    sendWindow: parseWindow(env.SEND_WINDOW?.trim() || 'mon-fri 09:00-20:00'),
+    meetingWindow: parseWindow(env.MEETING_WINDOW?.trim() || 'mon-fri 10:00-18:00'),
+    meetingMinutes: num('MEETING_MINUTES', 30),
+    searchHour: num('SEARCH_HOUR', 9),
+    buscadorMaxPerDay: num('BUSCADOR_MAX_PER_DAY', 50),
+    followupDays: num('FOLLOWUP_DAYS', 3),
+    closeAfterDays: num('CLOSE_AFTER_DAYS', 4),
+    maxFollowups: num('MAX_FOLLOWUPS', 1),
+    abMinPerVariant: num('AB_MIN_PER_VARIANT', 30),
+    ownerWaId: req('OWNER_WA_ID'),
+    ownerName: env.OWNER_NAME?.trim() || 'Lauri',
+    dncMode,
+    dncFile,
+    llm: { buscador: list(env.LLM_BUSCADOR), vendedor: list(env.LLM_VENDEDOR), analista: list(env.LLM_ANALISTA) },
+    googlePlacesKey: env.GOOGLE_PLACES_KEY?.trim() || undefined,
+    google,
+    hubUser: env.HUB_USER?.trim() || 'admin',
+    hubPassword: req('HUB_PASSWORD'),
+    contentDir: env.CONTENT_DIR?.trim() || 'content',
+    waAuthDir: env.WA_AUTH_DIR?.trim() || 'wa_auth',
+    replyDebounceSeconds: num('REPLY_DEBOUNCE_SECONDS', 30),
+  };
+}
