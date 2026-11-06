@@ -126,25 +126,30 @@ export async function loadPipelineData(db: Db, config: Config, now: Date): Promi
 }
 
 const PIPELINE_CSS = `
-.flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:6px;margin-bottom:10px}
-.node{background:#fff;border:2px solid #cfd6dd;border-radius:8px;padding:6px 10px;min-width:130px;flex:1 1 130px}
-.node b{display:block;font-size:12px;color:#556}
-.node.lauri{border-color:#e08a00;background:#fff4dd}
-.node.ext{background:#eef2f6;border-style:dashed}
-.arrow{align-self:center;font-weight:700;color:#778}
-.agents{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-bottom:12px}
+.flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:0;margin-bottom:14px}
+.node{background:#fff;border:1px solid var(--linea);border-radius:var(--r-item);padding:10px 14px;min-width:130px;flex:1 1 130px;font-size:14px;transition:border-color .25s var(--ease),transform .25s var(--ease)}
+.node:hover{border-color:var(--marino)}
+.node b{display:block;font-size:13px;font-weight:500;color:var(--suave);margin-bottom:2px}
+.node.lauri{border-color:rgb(46 91 255/.45);background:var(--cobalto-velo)}
+.node.lauri b{color:var(--cobalto)}
+.node.ext{background:transparent;border-style:dashed}
+.arrow{align-self:center;flex:0 0 22px;height:1px;background:var(--linea);font-size:0;position:relative}
+.arrow::after{content:"";position:absolute;right:0;top:-3px;border:3.5px solid transparent;border-left:5px solid rgb(16 33 61/.35)}
+.agents{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr));gap:16px;margin-bottom:16px}
 .agents .card{margin:0}
-.agents ul{margin:4px 0;padding-left:18px}
-.agents small{color:#556}
-.err{color:#b00020}
-.fun{display:flex;align-items:center;gap:8px;margin:3px 0}
-.fun span{flex:0 0 140px}
-.fun .bar{height:16px;background:#0b5fd1;border-radius:4px;min-width:2px}
-.fun.side .bar{background:#8a8f98}
-.ev.error td{background:#fde2e2}
-.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.agents ul,.agents ol{margin:2px 0;padding-left:18px;font-size:14px}
+.err{color:var(--cobalto)}
+.fun{display:grid;grid-template-columns:150px 1fr 44px;align-items:center;gap:12px;margin:6px 0;font-size:14px}
+.fun .track{height:8px;border-radius:99px;background:rgb(16 33 61/.06);overflow:hidden}
+.fun .bar{height:100%;background:var(--cobalto);border-radius:99px;min-width:3px;transition:width .6s var(--ease)}
+.fun.side .bar{background:rgb(16 33 61/.35)}
+.fun b{font-weight:400;text-align:right}
+hr{border:0;border-top:1px solid var(--linea);margin:14px 0}
+.ev.error td{color:var(--cobalto)}
+.ev.error td:first-child{box-shadow:inset 2px 0 0 var(--cobalto)}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px}
 .scroll{overflow-x:auto}
-@media(max-width:760px){.flow{flex-direction:column}.arrow{transform:rotate(90deg);align-self:center}.node{flex:none}}
+@media(max-width:860px){.flow{flex-direction:column}.arrow{flex:0 0 16px;width:1px;height:16px;align-self:center}.arrow::after{right:-3px;top:auto;bottom:0;border:3.5px solid transparent;border-top:5px solid rgb(16 33 61/.35)}.node{flex:none}.fun{grid-template-columns:110px 1fr 36px}}
 `;
 
 const AUTHOR: Record<Message['author'], string> = { prospect: 'Psicólogo', agent: 'Agente', lauri: 'Lauri' };
@@ -187,13 +192,13 @@ export function PipelineView({ d, config, fmt }: { d: PipelineData; config: Conf
   const funnel = (s: Status, side = false) => (
     <div class={side ? 'fun side' : 'fun'}>
       <span>{STATUS_LABELS[s]}</span>
-      <div class="bar" style={`width:${((d.statusCounts[s] ?? 0) / max) * 60}%`}></div>
+      <div class="track"><div class="bar" style={`width:${((d.statusCounts[s] ?? 0) / max) * 100}%`}></div></div>
       <b>{d.statusCounts[s] ?? 0}</b>
     </div>
   );
   return (
     <div class="page">
-      <style>{PIPELINE_CSS}</style>
+      <style dangerouslySetInnerHTML={{ __html: PIPELINE_CSS }} />
       <h2>Pipeline de agentes</h2>
 
       <div class="card">
@@ -297,9 +302,9 @@ export function PipelineView({ d, config, fmt }: { d: PipelineData; config: Conf
   );
 }
 
-export function PipelinePage(p: { d: PipelineData; config: Config; fmt: (x: Date) => string; banners: string[] }) {
+export function PipelinePage(p: { d: PipelineData; config: Config; fmt: (x: Date) => string; chrome: { banners: string[]; attention: number; wa: string; active: string } }) {
   return (
-    <Layout title="Pipeline" refresh banners={p.banners}>
+    <Layout title="Pipeline" refresh {...p.chrome}>
       <PipelineView d={p.d} config={p.config} fmt={p.fmt} />
     </Layout>
   );

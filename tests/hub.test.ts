@@ -114,6 +114,13 @@ describe('hub', () => {
     expect(html).toContain('<img');
     expect(html).toContain('data:image/png');
   });
+  it('sin HUB_PASSWORD no pide contraseña y avisa', async () => {
+    const open = createHubApp({ db, config: { ...config, hubPassword: '' }, answerEscalation: answer as any });
+    const r = await open.request('/');
+    expect(r.status).toBe(200);
+    expect(await r.text()).toContain('El hub no tiene contraseña');
+  });
+
   it('CSRF: POST desde otro origen -> 403; sin credenciales -> 401', async () => {
     const id = await repo.addProposal(db, { kind: 'manual', summary: 'S', evidence: 'E', proposedContent: 'C' });
     const evil = form({});

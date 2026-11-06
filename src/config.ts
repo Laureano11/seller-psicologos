@@ -54,8 +54,9 @@ export function loadConfig(env: Env): Config {
   if (!/^\d{10,15}$/.test(ownerWaId) || ownerWaId === '5491100000000') {
     throw new Error('OWNER_WA_ID debe ser tu número real de WhatsApp: 10 a 15 dígitos, formato internacional sin + (ej. 5491123456789)');
   }
-  const hubPassword = req('HUB_PASSWORD');
-  if (hubPassword.length < 10 || hubPassword === 'cambiame') {
+  // Opcional: vacía = hub sin contraseña (solo para uso local). Si se define, debe ser fuerte.
+  const hubPassword = env.HUB_PASSWORD?.trim() ?? '';
+  if (hubPassword && (hubPassword.length < 10 || hubPassword === 'cambiame')) {
     throw new Error('HUB_PASSWORD debe tener al menos 10 caracteres y no ser la de ejemplo');
   }
 

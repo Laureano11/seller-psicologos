@@ -27,7 +27,8 @@ export function createHubApp(deps: HubDeps) {
   const withError = (path: string, msg: string) => `${path}?error=${encodeURIComponent(msg)}`;
 
   app.get('/health', (c) => c.text('ok'));
-  app.use('*', basicAuth({ username: config.hubUser, password: config.hubPassword }));
+  // Sin HUB_PASSWORD el hub no pide contraseña (solo debe escuchar en 127.0.0.1)
+  if (config.hubPassword) app.use('*', basicAuth({ username: config.hubUser, password: config.hubPassword }));
   // POST solo desde el propio hub: se compara el host del Origin (detrás del túnel el esquema puede diferir)
   app.use('*', csrf({
     origin: (origin, c) => {
@@ -41,12 +42,20 @@ export function createHubApp(deps: HubDeps) {
 
   async function banners(): Promise<string[]> {
     const out: string[] = [];
+    if (!config.hubPassword) out.push('El hub no tiene contraseña. Está bien en tu computadora; antes de publicarlo en internet configurá HUB_PASSWORD.');
     if (config.dncMode === 'off') out.push('Atención: el registro No Llame está desactivado (DNC_MODE=off). Se puede contactar a números inscriptos.');
     if (await kvGet(db, 'dnc_error')) out.push('Falta el archivo del Registro No Llame (DNC_FILE). El buscador no agrega prospectos hasta que lo cargues.');
     if (await kvGet(db, 'pausa_nuevos')) out.push('Los contactos nuevos están en pausa.');
     const wa = await kvGet<{ state: string }>(db, 'wa_status');
     if (wa?.state !== 'conectado') out.push(`WhatsApp no está conectado (${wa?.state ?? 'sin estado'}). Revisá la pestaña Sistema.`);
     return out;
+  }
+
+  // Datos comunes del marco: avisos, cuántas conversaciones te necesitan y estado de WhatsApp
+  async function chrome(active: string) {
+    const attention = (await listProspectsForHub(db)).filter((p) => p.needsAttention).length;
+    const wa = await kvGet<{ state: string }>(db, 'wa_status');
+    return { banners: await banners(), attention, wa: wa?.state ?? 'sin estado', active };
   }
 
   async function home(c: any, selectedId?: number) {
@@ -61,7 +70,7 @@ export function createHubApp(deps: HubDeps) {
       detail = <ProspectDetail prospect={prospect} messages={await listMessages(db, prospect.id)} escalations={escalations} fmt={fmt} />;
     }
     return c.html(
-      <Layout refresh={!hasForm} banners={await banners()} error={c.req.query('error')}>
+      <Layout refresh={!hasForm} {...await chrome('/')} error={c.req.query('error')}>
         <MetricsBar m={computeMetrics(prospects)} />
         <div class="cols">
           <ProspectList prospects={prospects} selectedId={selectedId} />
@@ -111,7 +120,7 @@ export function createHubApp(deps: HubDeps) {
       return { stat: s, templates: variants.find((v) => v.id === s.variantId)?.template ?? '', verdict };
     });
     return c.html(
-      <Layout title="Mejoras" banners={await banners()} error={c.req.query('error')}>
+      <Layout title="Mejoras" {...await chrome('/mejoras')} error={c.req.query('error')}>
         <ProposalsView pending={await listProposals(db, 'pendiente')} stats={rows} manuals={await listManualVersions(db, 'ventas')} fmt={fmt} />
       </Layout>,
     );
@@ -139,7 +148,7 @@ export function createHubApp(deps: HubDeps) {
     const meetings = await listUpcomingMeetings(db, new Date());
     const names = new Map((await listProspectsForHub(db)).map((p) => [p.id, p.name]));
     return c.html(
-      <Layout title="Sistema" banners={await banners()} error={c.req.query('error')}>
+      <Layout title="Sistema" {...await chrome('/sistema')} error={c.req.query('error')}>
         <SystemView waState={wa?.state ?? 'sin estado'} qrDataUrl={qrDataUrl} events={await listEvents(db, 50)} meetings={meetings} names={names} fmt={fmt} />
       </Layout>,
     );
@@ -147,7 +156,7 @@ export function createHubApp(deps: HubDeps) {
 
   app.get('/pipeline', async (c) => {
     const d = await loadPipelineData(db, config, new Date());
-    return c.html(<PipelinePage d={d} config={config} fmt={fmt} banners={await banners()} />);
+    return c.html(<PipelinePage d={d} config={config} fmt={fmt} chrome={await chrome('/pipeline')} />);
   });
 
   return app;

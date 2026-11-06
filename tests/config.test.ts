@@ -25,7 +25,7 @@ describe('loadConfig', () => {
     expect(loadConfig({ ...base, DNC_MODE: 'file', DNC_FILE: 'x.csv' }).dncFile).toBe('x.csv');
   });
   it('faltantes obligatorios', () => {
-    for (const k of ['DATABASE_URL', 'OWNER_WA_ID', 'HUB_PASSWORD']) {
+    for (const k of ['DATABASE_URL', 'OWNER_WA_ID']) {
       expect(() => loadConfig({ ...base, [k]: undefined })).toThrow(k);
     }
   });
@@ -46,6 +46,10 @@ describe('loadConfig', () => {
       expect(() => loadConfig({ ...base, HUB_PASSWORD: pw })).toThrow(/HUB_PASSWORD/);
     }
     expect(loadConfig({ ...base, HUB_PASSWORD: '1234567890' }).hubPassword).toBe('1234567890');
+  });
+  it('HUB_PASSWORD vacía o ausente = hub sin contraseña', () => {
+    expect(loadConfig({ ...base, HUB_PASSWORD: undefined }).hubPassword).toBe('');
+    expect(loadConfig({ ...base, HUB_PASSWORD: '' }).hubPassword).toBe('');
   });
   it('rechaza OWNER_WA_ID inválido o de ejemplo', () => {
     for (const id of ['5491100000000', '123456789', '5491155551234567', '+5491155551234', '54 9 11 5555 1234']) {

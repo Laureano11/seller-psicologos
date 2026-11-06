@@ -40,8 +40,8 @@ describe('pipeline', () => {
     expect(d.statusCounts.encontrado).toBe(3);
     expect(d.statusCounts.contactado).toBe(2);
     const html = await page();
-    expect(html).toMatch(/Encontrado<\/span><div class="bar"[^>]*><\/div><b>3<\/b>/);
-    expect(html).toMatch(/Contactado<\/span><div class="bar"[^>]*><\/div><b>2<\/b>/);
+    expect(html).toMatch(/Encontrado<\/span><div class="track"><div class="bar"[^>]*><\/div><\/div><b>3<\/b>/);
+    expect(html).toMatch(/Contactado<\/span><div class="track"><div class="bar"[^>]*><\/div><\/div><b>2<\/b>/);
   });
 
   it('escapa mensajes', async () => {

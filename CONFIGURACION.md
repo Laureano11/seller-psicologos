@@ -16,8 +16,8 @@ cp .env.example .env
 |---|---|
 | `OWNER_WA_ID` | Tu número de WhatsApp en formato internacional, sin `+` ni espacios. Ej: `5491123456789`. A este número te llegan los avisos. |
 | `OWNER_NAME` | Cómo firmás (por defecto `Lauri`). |
-| `HUB_USER` | Usuario para entrar al hub. |
-| `HUB_PASSWORD` | Contraseña fuerte, mínimo 10 caracteres. El hub va a estar en internet: no uses una fácil. Generá una con `openssl rand -base64 18`. |
+| `HUB_USER` | Usuario para entrar al hub (solo se usa si hay contraseña). |
+| `HUB_PASSWORD` | **Opcional.** Vacía = el hub no pide contraseña: sirve en tu computadora, porque solo escucha en `127.0.0.1`. **Antes de publicarlo en internet (paso 7) es obligatorio poner una**, de mínimo 10 caracteres. Generá una con `openssl rand -base64 18`. |
 
 ## 2. Modelos de IA (gratis)
 
@@ -107,7 +107,7 @@ docker compose up -d --build db worker hub
 
 1. Creá una cuenta en https://dash.cloudflare.com. Necesitás un dominio agregado a Cloudflare.
 2. Andá a Zero Trust → Networks → Tunnels → "Create a tunnel" (tipo Cloudflared).
-3. Copiá el token y pegalo en `CLOUDFLARE_TUNNEL_TOKEN`.
+3. Copiá el token y pegalo en `CLOUDFLARE_TUNNEL_TOKEN`. **Antes de seguir, poné una `HUB_PASSWORD`.**
 4. En "Public Hostname" configurá, por ejemplo, `hub.tudominio.com` → servicio `http://hub:3000`.
 5. Levantá el túnel: `docker compose --profile tunnel up -d`
 
@@ -138,7 +138,8 @@ Recordá que usar WhatsApp personal con automatización va contra los términos 
 
 ## Checklist final
 
-- [ ] `.env` con `OWNER_WA_ID`, `HUB_PASSWORD` fuerte y al menos una clave de IA
+- [ ] `.env` con `OWNER_WA_ID` y al menos una clave de IA
+- [ ] `HUB_PASSWORD` fuerte antes de publicar el hub en internet
 - [ ] `GOOGLE_PLACES_KEY`
 - [ ] OAuth de Google + `npm run google:auth` → `GOOGLE_REFRESH_TOKEN`
 - [ ] `data/no_llame.csv` + `DNC_MODE=file`
