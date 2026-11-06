@@ -399,3 +399,8 @@ export async function isSystemWaMessageId(db: Db, waMessageId: string): Promise<
   );
   return r.length > 0;
 }
+
+export async function countOptOutsSince(db: Db, since: Date): Promise<number> {
+  const r = await db.query<{ n: number }>('SELECT count(*)::int AS n FROM opt_outs WHERE created_at >= $1', [since]);
+  return r[0].n;
+}
