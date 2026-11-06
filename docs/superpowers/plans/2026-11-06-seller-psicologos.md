@@ -383,3 +383,46 @@ DNC_MODE=file sin DNC_FILE -> throw; defaults dailyNewContacts=5, searchHour=9
 - [ ] **Step 2: Verificación de despliegue local:** `.env` de prueba (sin keys reales, `DNC_MODE=off`) → `docker compose up -d --build` → `docker compose ps` muestra `db`, `worker`, `hub` en running; `curl -s -o /dev/null -w '%{http_code}' localhost:3000/health` → `200`; `curl -u admin:<pass> localhost:3000/sistema` contiene `qr` o `conectando`; `docker compose logs worker` sin errores fatales (muestra estado `qr`).
 - [ ] **Step 3:** `npx vitest run && npx tsc --noEmit` → PASS.
 - [ ] **Step 4:** Commit `chore: docker compose, script google oauth y readme`.
+
+---
+
+### Task 10: Hub — página "Pipeline" (visualizar cómo se comunican los agentes)
+
+Pedido de Lauri: "quiero ver en el hub los pipelines de comunicación, cómo se comunican, la información que usa cada agente, los estados, qué mensajes mandaron, etc. Para que sea fácil de visualizar."
+
+**Files:**
+- Create: `src/hub/pipeline.tsx` (vista + carga de datos), `src/db/` solo si hace falta una consulta nueva en `repo.ts` (agregar funciones, no cambiar las existentes)
+- Modify: `src/hub/app.tsx` (ruta `GET /pipeline` con la misma auth), `src/hub/views.tsx` (link "Pipeline" en la navegación existente)
+- Test: `tests/pipeline.test.ts`
+
+**Interfaces:**
+- Consumes: repo existente (`listEvents`, `kvGet`, `listProspectsForHub`, mensajes, outbox, escalaciones, propuestas, variantes, `getActiveManual`, `listFaq`), `Config` (`llm.*`, ventanas, límites).
+- Produces: `GET /pipeline` (requiere Basic Auth como el resto), `loadPipelineData(db, config, now): Promise<PipelineData>` exportada desde `src/hub/pipeline.tsx` para testear sin HTTP.
+
+**Contenido de la página (en español, mismo estilo visual del hub, CSS inline, sin CDNs ni JS externo):**
+
+1. **Diagrama del flujo** (HTML/CSS o SVG inline, sin librerías): cajas y flechas con contadores reales:
+   `Fuentes (Google Places, sitios web)` → `Buscador (9:00)` → `Base de prospectos [N encontrados]` → `Orquestador (cada minuto, máx 5/día)` → `Vendedor` → `Outbox [pendientes / enviados hoy / bloqueados]` → `WhatsApp` → `Psicólogo`; respuesta `Psicólogo` → `Lista blanca` → `Vendedor (espera 30 s)`; ramas desde Vendedor: `Agenda (Calendar + Gmail) [reuniones]`, `Escalación → Lauri (hub + WhatsApp a sí mismo) [abiertas]`, `Listo para cerrar → Lauri [N]`; `Analista (lunes 8:00)` → `Propuestas → Lauri aprueba [pendientes]` → `Manual / aperturas`. Cada caja muestra su contador; las que necesitan a Lauri resaltadas.
+2. **Tarjeta por agente** (Buscador, Vendedor, Agenda, Orquestador, Analista) con:
+   - Qué hace (1 línea) y cuándo corre.
+   - Modelos configurados (lista `proveedor:modelo` de `config.llm.*`, en orden de fallback; Agenda y Orquestador: "sin modelo").
+   - Información que usa: Buscador → ciudades/cursor actual (`kv buscador_cursor`), fuentes activas; Vendedor → versión activa de manual de ventas / producto / estilo (largo en caracteres + fecha), cantidad de FAQ, variante de apertura activa y candidata; Analista → umbral `abMinPerVariant`, contactos desde la última propuesta; Orquestador → ventana de envío, límite diario, contactos hoy, `pausa_nuevos`, estado de WhatsApp.
+   - Última actividad: último evento relevante con fecha (p. ej. `buscador_run` con found/inserted/skipped), errores recientes del agente (eventos `*_error` de las últimas 24 h).
+3. **Embudo de estados**: barra horizontal por estado (todos los estados en orden: encontrado → contactado → conversando → interesado → reunion_agendada → listo_para_cerrar, y aparte rechazado, sin_respuesta, baja, descartado) con cantidad y etiqueta en español (reutilizar las etiquetas existentes del hub).
+4. **Registro de mensajes**: últimos 50 mensajes de todos los prospectos, más recientes primero: fecha/hora (zona `config.tz`), prospecto (link a `/p/:id`), dirección y autor (Psicólogo / Agente / Lauri), texto (truncado a 200 caracteres, escapado), y para salientes el estado del outbox si se puede asociar (enviado / pendiente / bloqueado / fallido). Además una tabla "Outbox pendiente" con los próximos envíos programados (destino, `send_after`, tipo prospecto/self).
+5. **Línea de tiempo de eventos**: últimos 30 eventos (tipo, fecha, payload resumido en una línea), con color para errores.
+
+**Reglas:**
+- Todo contenido de usuarios/LLM escapado (JSX por defecto; nunca `raw`).
+- Auto-refresh cada 30 s con `<meta http-equiv="refresh">`.
+- Responsive: en celular las cajas del diagrama se apilan verticalmente.
+- Solo lectura: la página no modifica nada.
+
+- [ ] **Step 1: Tests que fallan** (`app.request` + memory db, como `tests/hub.test.ts`):
+  - `/pipeline` sin auth → 401; con auth → 200 y contiene "Buscador", "Vendedor", "Orquestador", "Analista", "Agenda".
+  - Con 3 prospectos `encontrado` y 2 `contactado` sembrados → el embudo muestra 3 y 2.
+  - Mensaje con `<script>` en el body → aparece escapado.
+  - `config.llm.vendedor = ['google:gemini-2.5-flash','groq:llama-3.3-70b-versatile']` → ambos aparecen en la tarjeta del Vendedor en ese orden.
+  - Item de outbox pendiente → aparece en "Outbox pendiente".
+  - `loadPipelineData` con un evento `buscador_run` → expone found/inserted.
+- [ ] **Step 2:** FAIL. **Step 3:** Implementar. **Step 4:** PASS + `tsc` + suite completa. **Step 5:** Commit `feat: hub — página pipeline de agentes`.
