@@ -16,111 +16,131 @@ export const STATUS_LABELS: Record<Status, string> = {
 };
 
 const CSS = `
+@font-face{font-family:Geist;src:url(/fonts/Geist-Regular.woff2) format('woff2');font-weight:400;font-display:swap}
+@font-face{font-family:Geist;src:url(/fonts/Geist-Medium.woff2) format('woff2');font-weight:500;font-display:swap}
+@font-face{font-family:'Geist Mono';src:url(/fonts/GeistMono-Regular.woff2) format('woff2');font-weight:400;font-display:swap}
 @view-transition{navigation:auto}
 :root{
-  --porcelana:#EEF1F5;--marino:#10213D;--cobalto:#2E5BFF;
-  --tinta:var(--marino);--suave:rgb(16 33 61/.62);--linea:rgb(16 33 61/.1);
-  --panel:rgb(255 255 255/.72);--cobalto-velo:rgb(46 91 255/.08);
-  --r-panel:18px;--r-item:10px;--ease:cubic-bezier(.2,.7,.2,1);
-  color-scheme:light;
+  --canvas:#101010;--lift:#1d1a18;--btn:#1f1d1c;--stroke:#3d3a39;--graphite:#4d4947;
+  --granite:#8a8380;--stone:#b8b3b0;--bone:#eeeeee;--chalk:#fafafa;--ink:#101010;
+  --orange:#ee6018;--green:#a0ca92;
+  --sans:Geist,Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --mono:'Geist Mono','JetBrains Mono','IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --r-sm:3px;--r-card:10px;--r-panel:20px;--ease:cubic-bezier(.4,0,.2,1);
+  color-scheme:dark;
 }
 *{box-sizing:border-box}
-html{background:var(--porcelana)}
-body{margin:0;font:15px/1.5 ui-sans-serif,-apple-system,"SF Pro Text","Segoe UI",Roboto,sans-serif;color:var(--tinta);
-  background:radial-gradient(1200px 600px at 100% -10%,rgb(46 91 255/.07),transparent 60%),var(--porcelana);
-  min-height:100vh;display:grid;grid-template-columns:232px 1fr;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
-a{color:var(--cobalto);text-decoration:none;transition:opacity .2s var(--ease)}
-a:hover{opacity:.75}
-:focus-visible{outline:2px solid var(--cobalto);outline-offset:2px;border-radius:6px}
-h1,h2,h3,h4{margin:0 0 10px;font-weight:600;letter-spacing:-.01em;line-height:1.25}
-h2{font-size:24px}h3{font-size:17px}h4{font-size:13px;color:var(--suave);font-weight:500;margin:14px 0 4px}
-small{color:var(--suave)}
+html{background:var(--canvas)}
+body{margin:0;background:var(--canvas);color:var(--bone);font:400 16px/1.5 var(--sans);-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+a{color:var(--bone);text-decoration:underline;text-decoration-color:var(--stroke);text-underline-offset:3px;transition:color .15s var(--ease),text-decoration-color .15s var(--ease)}
+a:hover{color:var(--chalk);text-decoration-color:var(--chalk)}
+:focus-visible{outline:1px solid var(--orange);outline-offset:3px}
+h1,h2,h3{font-weight:400;margin:0 0 16px}
+h2{font-size:36px;line-height:1.1;letter-spacing:-1.12px}
+h3{font-size:16px;line-height:1.5;letter-spacing:-.02em;margin-bottom:12px}
+h4,th,.label{font:400 12px/1 var(--mono);letter-spacing:-.24px;text-transform:uppercase;color:var(--stone)}
+h4{margin:24px 0 8px}
+small{color:var(--granite);font-size:14px}
+.mono{font-family:var(--mono);font-size:13px}
 
-/* Barra lateral */
-.rail{position:sticky;top:0;height:100vh;background:var(--marino);color:var(--porcelana);padding:28px 18px;display:flex;flex-direction:column;gap:28px;view-transition-name:rail}
-.brand{font-weight:600;letter-spacing:.02em;font-size:15px;opacity:.9}
-.signal{display:flex;align-items:center;gap:14px;color:var(--porcelana)}
-.signal:hover{opacity:1}
-.ring{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;font-size:20px;font-weight:300;
-  border:1.5px solid rgb(238 241 245/.25);transition:border-color .4s var(--ease),box-shadow .4s var(--ease)}
-.signal.on .ring{border-color:var(--cobalto);box-shadow:0 0 0 6px rgb(46 91 255/.18);animation:respira 3.2s var(--ease) infinite}
-.signal span{font-size:13px;line-height:1.3;opacity:.8}
-@keyframes respira{50%{box-shadow:0 0 0 12px rgb(46 91 255/.05)}}
-.nav{display:flex;flex-direction:column;gap:2px}
-.nav a{color:var(--porcelana);opacity:.62;padding:9px 12px;border-radius:var(--r-item);transition:opacity .25s var(--ease),background-color .25s var(--ease)}
-.nav a:hover{opacity:1;background:rgb(238 241 245/.06)}
-.nav a.on{opacity:1;background:rgb(238 241 245/.1);box-shadow:inset 2px 0 0 var(--cobalto)}
-.wa{margin-top:auto;font-size:13px;opacity:.75;display:flex;align-items:center;gap:8px}
-.dot{width:8px;height:8px;border-radius:50%;background:rgb(238 241 245/.35)}
-.wa.ok .dot{background:var(--cobalto);box-shadow:0 0 0 3px rgb(46 91 255/.25)}
+/* Barra superior */
+.top{position:sticky;top:0;z-index:5;background:rgb(16 16 16/.96);border-bottom:1px solid var(--lift);view-transition-name:top}
+.top-in{max-width:1200px;margin:0 auto;height:64px;padding:0 24px;display:flex;align-items:center;gap:32px}
+.mark{font:400 12px/1 var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--bone);text-decoration:none;display:flex;align-items:center;gap:10px}
+.nav{display:flex;gap:4px;flex:1}
+.nav a{font-size:14px;text-transform:uppercase;text-decoration:none;color:var(--granite);padding:8px 12px;border-radius:var(--r-sm);transition:color .15s var(--ease),background-color .15s var(--ease)}
+.nav a:hover{color:var(--bone)}
+.nav a.on{color:var(--bone);background:var(--lift)}
+.wa{font:400 12px/1 var(--mono);text-transform:uppercase;color:var(--granite);display:flex;align-items:center;gap:8px}
+.pulse{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--graphite);flex:none}
+.pulse.live{background:var(--orange)}
+.pulse.ok{background:var(--green)}
+.need{font-size:14px;text-decoration:none;padding:8px 14px;border-radius:var(--r-sm);background:var(--lift);color:var(--granite);display:flex;align-items:center;gap:8px;transition:background-color .15s var(--ease),color .15s var(--ease)}
+.need.on{background:var(--chalk);color:var(--ink)}
+.need.on:hover{color:var(--ink);background:var(--bone)}
 
-/* Área principal */
-main{min-width:0;padding:28px 32px 40px;view-transition-name:main;animation:entra .5s var(--ease) both}
-@keyframes entra{from{opacity:0;transform:translateY(6px)}}
-::view-transition-old(main){animation:.18s var(--ease) both sale}
-::view-transition-new(main){animation:.32s var(--ease) both entra}
-@keyframes sale{to{opacity:0}}
-.banner{margin:0 0 10px;padding:11px 16px;border-radius:var(--r-item);background:var(--panel);border:1px solid var(--linea);font-size:14px;backdrop-filter:blur(8px)}
-.notices{list-style:none;margin:0 0 18px;padding:4px 16px;border-radius:var(--r-item);background:var(--panel);border:1px solid var(--linea);backdrop-filter:blur(8px)}
-.notices .banner{margin:0;padding:7px 0 7px 16px;border:0;border-radius:0;background:none;backdrop-filter:none;font-size:13.5px;color:var(--suave);position:relative}
-.notices .banner+.banner{border-top:1px solid var(--linea)}
-.notices .banner::before{content:'';position:absolute;left:0;top:50%;width:6px;height:6px;margin-top:-3px;border-radius:50%;border:1.5px solid var(--marino);opacity:.5}
-.banner.error{border-color:var(--cobalto);background:var(--cobalto-velo)}
+/* Lienzo */
+main{max-width:1200px;margin:0 auto;padding:40px 24px 96px;view-transition-name:main}
+::view-transition-old(main),::view-transition-new(main){animation-duration:.2s;animation-timing-function:var(--ease)}
+.notices{list-style:none;margin:0 0 40px;padding:0;border-top:1px solid var(--lift)}
+.banner{display:flex;gap:12px;align-items:baseline;padding:12px 0;border-bottom:1px solid var(--lift);font-size:14px;color:var(--granite)}
+.banner::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--orange);flex:none;transform:translateY(-1px)}
+.banner.error{color:var(--bone);margin:0 0 16px;border-top:1px solid var(--lift)}
 
-.metrics{display:flex;flex-wrap:wrap;margin:6px 0 26px;border-top:1px solid var(--linea);border-bottom:1px solid var(--linea)}
-.metric{flex:1 1 120px;padding:16px 18px;border-left:1px solid var(--linea)}
-.metric:first-child{border-left:0;padding-left:2px}
-.metric b{display:block;font-size:34px;font-weight:300;letter-spacing:-.03em;line-height:1.1}
-.metric span{font-size:13px;color:var(--suave)}
-.metric.hot b{color:var(--cobalto)}
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));border:1px solid var(--lift);border-radius:var(--r-card);margin:0 0 56px;overflow:hidden}
+.metric{padding:20px;border-left:1px solid var(--lift);display:flex;flex-direction:column-reverse;gap:12px}
+.metric:first-child{border-left:0}
+.metric b{font:400 36px/1.1 var(--sans);letter-spacing:-1.12px;color:var(--bone)}
+.metric span{font:400 12px/1 var(--mono);letter-spacing:-.24px;text-transform:uppercase;color:var(--stone)}
+.metric.good b{color:var(--green)}
+.metric.hot b{color:var(--orange)}
 
-.cols{display:flex;gap:20px;align-items:flex-start}
-.list{flex:0 0 330px;max-width:100%;background:var(--panel);border:1px solid var(--linea);border-radius:var(--r-panel);padding:6px;backdrop-filter:blur(10px);max-height:calc(100vh - 220px);overflow:auto}
-.detail{flex:1;min-width:0}
-.card{background:var(--panel);border:1px solid var(--linea);border-radius:var(--r-panel);padding:20px 22px;margin-bottom:16px;backdrop-filter:blur(10px)}
-.card .card{background:transparent;border-radius:var(--r-item);padding:16px}
-.item{display:block;padding:11px 14px;border-radius:var(--r-item);color:inherit;transition:background-color .25s var(--ease),transform .25s var(--ease)}
-.item:hover{opacity:1;background:var(--cobalto-velo)}
-.item.sel{background:var(--marino);color:var(--porcelana)}
-.item.sel small{color:rgb(238 241 245/.7)}
-.item small{display:block;font-size:13px}
-.pin{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--cobalto);margin-right:8px;vertical-align:middle;box-shadow:0 0 0 3px rgb(46 91 255/.2)}
-.tag{display:inline-block;font-size:12px;border:1px solid var(--linea);border-radius:99px;padding:1px 9px;margin-left:4px}
+.cols{display:grid;grid-template-columns:320px 1fr;gap:24px;align-items:start}
+.list{border:1px solid var(--lift);border-radius:var(--r-card);overflow:hidden;position:sticky;top:88px;max-height:calc(100vh - 112px);overflow-y:auto}
+.item{display:block;padding:16px 20px;border-bottom:1px solid var(--lift);text-decoration:none;color:var(--bone);transition:background-color .15s var(--ease)}
+.item:last-child{border-bottom:0}
+.item:hover{background:var(--lift);color:var(--bone)}
+.item.sel{background:var(--bone);color:var(--ink)}
+.item.sel small{color:var(--graphite)}
+.item strong{font-weight:400;letter-spacing:-.01em}
+.item small{display:block;font:400 12px/1.4 var(--mono);text-transform:uppercase;letter-spacing:-.24px;margin-top:4px}
+.pin{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--orange);margin-right:10px;vertical-align:middle}
 
-.chat{display:flex;flex-direction:column;gap:8px}
-.bubble{max-width:78%;padding:9px 14px;border-radius:16px;white-space:pre-wrap;overflow-wrap:anywhere}
-.bubble small{display:block;font-size:12px;margin-bottom:2px}
-.bubble.prospect{background:#fff;border:1px solid var(--linea);align-self:flex-start;border-bottom-left-radius:5px}
-.bubble.agent{background:var(--cobalto-velo);border:1px solid rgb(46 91 255/.22);align-self:flex-end;border-bottom-right-radius:5px}
-.bubble.lauri{background:var(--marino);color:var(--porcelana);align-self:flex-end;border-bottom-right-radius:5px}
-.bubble.lauri small{color:rgb(238 241 245/.7)}
+/* La tarjeta clara: el trabajo sobre la mesa */
+.detail{background:var(--bone);color:var(--ink);border-radius:var(--r-panel);padding:8px 32px;min-width:0;animation:aterriza .2s var(--ease) both}
+@keyframes aterriza{from{opacity:0;transform:translateY(4px)}}
+.detail .card{padding:24px 0;border:0;border-bottom:1px solid #d6d3d1;border-radius:0;margin:0}
+.detail .card:last-child{border-bottom:0}
+.detail h2{color:var(--ink)}
+.detail h3{color:var(--ink)}
+.detail small{color:var(--graphite)}
+.detail a{color:var(--ink);text-decoration-color:var(--stone)}
+.detail pre{background:#e2e0de;color:var(--ink)}
+.detail .card.ask{border-left:2px solid var(--orange);padding-left:20px}
+.card{border:1px solid var(--lift);border-radius:var(--r-card);padding:24px;margin-bottom:24px}
+.card .card{background:var(--bone);color:var(--ink);border:0}
+.card .card pre{background:#e2e0de;color:var(--ink)}
+.tag{display:inline-block;font:400 12px/1 var(--mono);text-transform:uppercase;padding:4px 6px;border:1px solid var(--stroke);border-radius:var(--r-sm);margin-left:6px}
 
-textarea{width:100%;min-height:96px;font:inherit;color:inherit;padding:12px 14px;border:1px solid var(--linea);border-radius:var(--r-item);background:#fff;resize:vertical;transition:border-color .2s var(--ease),box-shadow .2s var(--ease);margin-bottom:10px}
-textarea:focus{outline:0;border-color:var(--cobalto);box-shadow:0 0 0 4px rgb(46 91 255/.12)}
-button{font:inherit;font-weight:500;padding:10px 20px;border:1px solid var(--cobalto);border-radius:99px;background:var(--cobalto);color:#fff;cursor:pointer;
-  transition:transform .15s var(--ease),box-shadow .25s var(--ease),background-color .25s var(--ease)}
-button:hover{box-shadow:0 6px 18px -6px rgb(46 91 255/.6)}
-button:active{transform:scale(.97)}
-button.no{background:transparent;color:var(--marino);border-color:var(--linea)}
-button.no:hover{box-shadow:none;border-color:var(--marino)}
+.chat{display:flex;flex-direction:column;gap:12px}
+.bubble{max-width:78%;padding:12px 16px;border-radius:var(--r-card);white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.5}
+.bubble small{display:block;font:400 12px/1 var(--mono);text-transform:uppercase;letter-spacing:-.24px;margin-bottom:8px}
+.bubble.prospect{background:var(--chalk);border:1px solid #d6d3d1;align-self:flex-start}
+.bubble.prospect small{color:var(--granite)}
+.bubble.agent{background:var(--ink);color:var(--bone);align-self:flex-end}
+.bubble.agent small{color:var(--granite)}
+.bubble.lauri{background:var(--lift);color:var(--bone);align-self:flex-end;border:1px solid var(--orange)}
+.bubble.lauri small{color:var(--orange)}
 
-table{border-collapse:collapse;width:100%;font-size:14px}
-th{font-weight:500;color:var(--suave);font-size:13px}
-th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--linea);vertical-align:top}
-tbody tr{transition:background-color .2s var(--ease)}
-tbody tr:hover{background:var(--cobalto-velo)}
-pre{white-space:pre-wrap;overflow-wrap:anywhere;background:rgb(16 33 61/.04);padding:10px 12px;border-radius:var(--r-item);margin:8px 0;font:13px/1.5 inherit}
-details summary{cursor:pointer;padding:6px 0}
-.page{padding:0}
-img{border-radius:var(--r-item)}
+textarea{width:100%;min-height:104px;font:inherit;color:var(--ink);background:var(--chalk);border:1px solid #d6d3d1;border-radius:var(--r-sm);padding:12px 14px;resize:vertical;margin-bottom:12px;transition:border-color .15s var(--ease)}
+textarea:focus{outline:0;border-color:var(--ink)}
+button{font:400 14px/1 var(--sans);height:36px;padding:0 14px;border:1px solid transparent;border-radius:var(--r-sm);background:var(--btn);color:var(--bone);cursor:pointer;transition:background-color .15s var(--ease),color .15s var(--ease),border-color .15s var(--ease)}
+button:hover{background:var(--graphite)}
+button:active{background:var(--stroke)}
+.detail button,.card .card button{background:var(--ink);color:var(--bone)}
+.detail button:hover,.card .card button:hover{background:var(--graphite)}
+button.no,.card .card button.no{background:transparent;color:inherit;border-color:var(--stroke)}
+button.no:hover,.card .card button.no:hover{border-color:currentColor;background:transparent}
+
+table{border-collapse:collapse;width:100%;font-size:14px;line-height:1.43}
+th,td{text-align:left;padding:12px 12px 12px 0;border-bottom:1px solid var(--lift);vertical-align:top}
+tbody tr{transition:background-color .15s var(--ease)}
+tbody tr:hover{background:var(--lift)}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--lift);padding:12px 14px;border-radius:var(--r-sm);margin:8px 0;font:400 13px/1.5 var(--mono)}
+details{border-top:1px solid var(--lift)}
+details summary{cursor:pointer;padding:12px 0;font-size:14px;color:var(--stone)}
+img{border-radius:var(--r-card);background:var(--chalk);padding:12px}
+hr{border:0;border-top:1px solid var(--lift);margin:16px 0}
 
 @media(max-width:860px){
-  body{grid-template-columns:1fr}
-  .rail{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;gap:14px;padding:14px 16px}
-  .brand{display:none}.ring{width:40px;height:40px;font-size:16px}
-  .nav{flex-direction:row;flex-wrap:wrap}.wa{margin:0}
-  main{padding:18px 16px 32px}
-  .cols{flex-direction:column}.list{flex:none;width:100%;max-height:none}.bubble{max-width:92%}
+  .top-in{height:auto;flex-wrap:wrap;gap:12px 20px;padding:14px 16px}
+  .nav{order:3;flex-basis:100%;overflow-x:auto}
+  main{padding:24px 16px 64px}
+  h2{font-size:28px;letter-spacing:-.8px}
+  .cols{grid-template-columns:1fr}
+  .list{position:static;max-height:none}
+  .detail{padding:4px 20px}
+  .bubble{max-width:92%}
 }
 @media(prefers-reduced-motion:reduce){*,::before,::after{animation:none!important;transition:none!important}::view-transition-group(*){animation:none!important}}
 `;
@@ -135,23 +155,25 @@ export function Layout(p: { title?: string; refresh?: boolean; banners?: string[
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         {p.refresh ? <meta http-equiv="refresh" content="30" /> : null}
         <title>{p.title ?? 'Hub de ventas'}</title>
+        <link rel="preload" href="/fonts/Geist-Regular.woff2" as="font" type="font/woff2" crossorigin="" />
         <style dangerouslySetInnerHTML={{ __html: CSS }} />
       </head>
       <body>
-        <aside class="rail">
-          <div class="brand">Hub de ventas</div>
-          <a href="/" class={n > 0 ? 'signal on' : 'signal'}>
-            <div class="ring">{n}</div>
-            <span>{n === 1 ? 'conversación te necesita' : n > 1 ? 'conversaciones te necesitan' : 'Nada pendiente para vos'}</span>
-          </a>
-          <nav class="nav">
-            {link('/', 'Prospectos')}
-            {link('/pipeline', 'Pipeline')}
-            {link('/mejoras', 'Mejoras')}
-            {link('/sistema', 'Sistema')}
-          </nav>
-          {p.wa !== undefined ? <div class={p.wa === 'conectado' ? 'wa ok' : 'wa'}><span class="dot"></span>WhatsApp {p.wa}</div> : null}
-        </aside>
+        <header class="top">
+          <div class="top-in">
+            <a class="mark" href="/"><span class={n > 0 ? 'pulse live' : 'pulse'}></span>Hub de ventas</a>
+            <nav class="nav">
+              {link('/', 'Prospectos')}
+              {link('/pipeline', 'Pipeline')}
+              {link('/mejoras', 'Mejoras')}
+              {link('/sistema', 'Sistema')}
+            </nav>
+            {p.wa !== undefined ? <div class="wa"><span class={p.wa === 'conectado' ? 'pulse ok' : 'pulse'}></span>WhatsApp {p.wa}</div> : null}
+            <a href="/" class={n > 0 ? 'need on' : 'need'}>
+              {n === 0 ? 'Nada pendiente' : n === 1 ? '1 conversación te necesita' : `${n} conversaciones te necesitan`}
+            </a>
+          </div>
+        </header>
         <main>
           {p.error ? <div class="banner error" role="alert">{p.error}</div> : null}
           {(p.banners ?? []).length > 0 ? <ul class="notices">{(p.banners ?? []).map((b) => <li class="banner">{b}</li>)}</ul> : null}
@@ -179,8 +201,8 @@ export function computeMetrics(ps: Prospect[]): Metrics {
   };
 }
 
-function Metric(p: { n: string | number; label: string; hot?: boolean }) {
-  return <div class={p.hot ? 'metric hot' : 'metric'}><b>{p.n}</b><span>{p.label}</span></div>;
+function Metric(p: { n: string | number; label: string; tone?: 'good' | 'hot' }) {
+  return <div class={p.tone ? `metric ${p.tone}` : 'metric'}><b>{p.n}</b><span>{p.label}</span></div>;
 }
 
 export function MetricsBar({ m }: { m: Metrics }) {
@@ -190,10 +212,10 @@ export function MetricsBar({ m }: { m: Metrics }) {
       <Metric n={m.encontrados} label="Encontrados" />
       <Metric n={m.contactados} label="Contactados" />
       <Metric n={`${m.respondieron} (${pct}%)`} label="Respondieron" />
-      <Metric n={m.listos} label="Listos para cerrar" />
+      <Metric n={m.listos} label="Listos para cerrar" tone={m.listos > 0 ? 'good' : undefined} />
       <Metric n={m.rechazados} label="Rechazados" />
       <Metric n={m.sinRespuesta} label="Sin respuesta" />
-      <Metric n={m.teNecesitan} label="Te necesitan" hot={m.teNecesitan > 0} />
+      <Metric n={m.teNecesitan} label="Te necesitan" tone={m.teNecesitan > 0 ? 'hot' : undefined} />
     </div>
   );
 }
@@ -238,7 +260,7 @@ export function ProspectDetail(p: {
         ) : <div>Sin evaluación todavía.</div>}
       </div>
       {p.escalations.map((e) => (
-        <div class="card">
+        <div class="card ask">
           <h3>Te hace falta responder</h3>
           <pre>{e.question}</pre>
           <form method="post" action={`/escalations/${e.id}/answer`}>

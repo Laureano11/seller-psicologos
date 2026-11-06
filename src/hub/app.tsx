@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { basicAuth } from 'hono/basic-auth';
 import { csrf } from 'hono/csrf';
+import { readFileSync } from 'node:fs';
 import QRCode from 'qrcode';
 import type { Db } from '../db/db.js';
 import type { Config } from '../config.js';
@@ -12,6 +13,10 @@ import { compareVariants, variantStats } from '../learning/stats.js';
 import { approveProposal, rejectProposal } from '../learning/proposals.js';
 import { PipelinePage, loadPipelineData } from './pipeline.js';
 import { Layout, MetricsBar, ProposalsView, ProspectDetail, ProspectList, SystemView, computeMetrics } from './views.js';
+
+// Tipografías propias (Geist, licencia OFL) servidas por el hub: sin CDNs
+const FONTS = new Set(['Geist-Regular.woff2', 'Geist-Medium.woff2', 'GeistMono-Regular.woff2']);
+const fontCache = new Map<string, Buffer>();
 
 export interface HubDeps {
   db: Db;
@@ -27,6 +32,16 @@ export function createHubApp(deps: HubDeps) {
   const withError = (path: string, msg: string) => `${path}?error=${encodeURIComponent(msg)}`;
 
   app.get('/health', (c) => c.text('ok'));
+  app.get('/fonts/:name', (c) => {
+    const name = c.req.param('name');
+    if (!FONTS.has(name)) return c.notFound();
+    let buf = fontCache.get(name);
+    if (!buf) {
+      buf = readFileSync(new URL(`./fonts/${name}`, import.meta.url));
+      fontCache.set(name, buf);
+    }
+    return c.body(new Uint8Array(buf), 200, { 'Content-Type': 'font/woff2', 'Cache-Control': 'public, max-age=31536000, immutable' });
+  });
   // Sin HUB_PASSWORD el hub no pide contraseña (solo debe escuchar en 127.0.0.1)
   if (config.hubPassword) app.use('*', basicAuth({ username: config.hubUser, password: config.hubPassword }));
   // POST solo desde el propio hub: se compara el host del Origin (detrás del túnel el esquema puede diferir)

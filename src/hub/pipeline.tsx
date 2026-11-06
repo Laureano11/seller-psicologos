@@ -126,30 +126,37 @@ export async function loadPipelineData(db: Db, config: Config, now: Date): Promi
 }
 
 const PIPELINE_CSS = `
-.flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:0;margin-bottom:14px}
-.node{background:#fff;border:1px solid var(--linea);border-radius:var(--r-item);padding:10px 14px;min-width:130px;flex:1 1 130px;font-size:14px;transition:border-color .25s var(--ease),transform .25s var(--ease)}
-.node:hover{border-color:var(--marino)}
-.node b{display:block;font-size:13px;font-weight:500;color:var(--suave);margin-bottom:2px}
-.node.lauri{border-color:rgb(46 91 255/.45);background:var(--cobalto-velo)}
-.node.lauri b{color:var(--cobalto)}
-.node.ext{background:transparent;border-style:dashed}
-.arrow{align-self:center;flex:0 0 22px;height:1px;background:var(--linea);font-size:0;position:relative}
-.arrow::after{content:"";position:absolute;right:0;top:-3px;border:3.5px solid transparent;border-left:5px solid rgb(16 33 61/.35)}
-.agents{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr));gap:16px;margin-bottom:16px}
+.frame{background:#0d0d0d;border:1px solid var(--lift);border-radius:var(--r-card);margin-bottom:56px;overflow:hidden;animation:enciende .2s var(--ease) both}
+@keyframes enciende{from{opacity:0}}
+.frame-bar{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--lift);font:400 12px/1 var(--mono);text-transform:uppercase;color:var(--stone)}
+.frame-bar i{width:10px;height:10px;border-radius:50%;background:var(--stroke);display:inline-block}
+.frame-bar span{margin-left:12px;display:flex;align-items:center;gap:8px}
+.frame-body{padding:24px}
+.frame-body h3{display:none}
+.flow{display:flex;flex-wrap:wrap;align-items:stretch;margin-bottom:16px}
+.flow:last-child{margin-bottom:0}
+.node{border:1px solid var(--lift);border-radius:var(--r-sm);padding:12px 14px;min-width:0;flex:1 1 96px;font-size:14px;overflow-wrap:anywhere;line-height:1.43;color:var(--bone);transition:border-color .15s var(--ease)}
+.node:hover{border-color:var(--stroke)}
+.node b{display:block;font:400 12px/1.3 var(--mono);text-transform:uppercase;letter-spacing:-.24px;color:var(--stone);margin-bottom:6px}
+.node.lauri{background:var(--bone);color:var(--ink);border-color:var(--bone)}
+.node.lauri b{color:var(--graphite)}
+.node.lauri b::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--orange);margin-right:8px;vertical-align:1px}
+.node.ext{border-style:dashed;color:var(--granite)}
+.arrow{align-self:center;flex:0 0 14px;height:1px;background:var(--stroke);font-size:0}
+.agents{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:24px;margin-bottom:56px}
 .agents .card{margin:0}
-.agents ul,.agents ol{margin:2px 0;padding-left:18px;font-size:14px}
-.err{color:var(--cobalto)}
-.fun{display:grid;grid-template-columns:150px 1fr 44px;align-items:center;gap:12px;margin:6px 0;font-size:14px}
-.fun .track{height:8px;border-radius:99px;background:rgb(16 33 61/.06);overflow:hidden}
-.fun .bar{height:100%;background:var(--cobalto);border-radius:99px;min-width:3px;transition:width .6s var(--ease)}
-.fun.side .bar{background:rgb(16 33 61/.35)}
-.fun b{font-weight:400;text-align:right}
-hr{border:0;border-top:1px solid var(--linea);margin:14px 0}
-.ev.error td{color:var(--cobalto)}
-.ev.error td:first-child{box-shadow:inset 2px 0 0 var(--cobalto)}
-.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px}
+.agents ul,.agents ol{margin:0;padding-left:18px;font-size:14px;line-height:1.43;color:var(--stone)}
+.agents h3{font-size:24px;letter-spacing:-.6px;line-height:1.1}
+.err{color:var(--orange)}
+.fun{display:grid;grid-template-columns:160px 1fr 48px;align-items:center;gap:16px;margin:10px 0;font-size:14px}
+.fun span{color:var(--stone)}
+.fun .track{height:2px;background:var(--lift)}
+.fun .bar{height:100%;background:var(--green);min-width:2px;transition:width .2s var(--ease)}
+.fun.side .bar{background:var(--graphite)}
+.fun b{font-weight:400;text-align:right;font-family:var(--mono);font-size:13px}
+.ev.error td{color:var(--orange)}
 .scroll{overflow-x:auto}
-@media(max-width:860px){.flow{flex-direction:column}.arrow{flex:0 0 16px;width:1px;height:16px;align-self:center}.arrow::after{right:-3px;top:auto;bottom:0;border:3.5px solid transparent;border-top:5px solid rgb(16 33 61/.35)}.node{flex:none}.fun{grid-template-columns:110px 1fr 36px}}
+@media(max-width:860px){.flow{flex-direction:column}.arrow{flex:0 0 14px;width:1px;height:14px}.node{flex:none}.fun{grid-template-columns:110px 1fr 36px}.frame-body{padding:16px}}
 `;
 
 const AUTHOR: Record<Message['author'], string> = { prospect: 'Psicólogo', agent: 'Agente', lauri: 'Lauri' };
@@ -201,7 +208,9 @@ export function PipelineView({ d, config, fmt }: { d: PipelineData; config: Conf
       <style dangerouslySetInnerHTML={{ __html: PIPELINE_CSS }} />
       <h2>Pipeline de agentes</h2>
 
-      <div class="card">
+      <div class="frame">
+        <div class="frame-bar"><i></i><i></i><i></i><span><span class={d.escalacionesAbiertas > 0 ? 'pulse live' : 'pulse ok'}></span>Flujo de agentes en vivo</span></div>
+        <div class="frame-body">
         <h3>Flujo</h3>
         <div class="flow">
           <Node title="Fuentes" n="Google Places, sitios web" cls="ext" /><Arrow />
@@ -227,6 +236,7 @@ export function PipelineView({ d, config, fmt }: { d: PipelineData; config: Conf
           <Node title="Analista (lunes 8:00)" /><Arrow />
           <Node title="Propuestas → Lauri aprueba" n={`${d.propuestasPendientes} pendientes`} cls="lauri" /><Arrow />
           <Node title="Manual / aperturas" />
+        </div>
         </div>
       </div>
 
