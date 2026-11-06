@@ -175,14 +175,17 @@ export async function countContactedSince(db: Db, since: Date): Promise<number> 
 
 // ---------- messages ----------
 
+/** Devuelve true si se insertó; false si ya existía un mensaje con ese wa_message_id. */
 export async function addMessage(
   db: Db,
   m: { prospectId: number; direction: 'in' | 'out'; author: 'prospect' | 'agent' | 'lauri'; body: string; waMessageId?: string },
-): Promise<void> {
-  await db.query(
-    'INSERT INTO messages (prospect_id, direction, author, body, wa_message_id) VALUES ($1,$2,$3,$4,$5)',
+): Promise<boolean> {
+  const r = await db.query(
+    `INSERT INTO messages (prospect_id, direction, author, body, wa_message_id) VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT DO NOTHING RETURNING id`,
     [m.prospectId, m.direction, m.author, m.body, m.waMessageId ?? null],
   );
+  return r.length > 0;
 }
 
 export async function listMessages(db: Db, prospectId: number): Promise<Message[]> {
@@ -395,9 +398,4 @@ export async function isSystemWaMessageId(db: Db, waMessageId: string): Promise<
     [waMessageId],
   );
   return r.length > 0;
-}
-
-/** ¿Ya hay un mensaje guardado con este id de WhatsApp? (dedupe de reentregas) */
-export async function messageExistsByWaId(db: Db, waMessageId: string): Promise<boolean> {
-  return (await db.query('SELECT 1 FROM messages WHERE wa_message_id=$1 LIMIT 1', [waMessageId])).length > 0;
 }

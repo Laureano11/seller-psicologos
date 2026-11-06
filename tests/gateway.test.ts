@@ -105,11 +105,53 @@ describe('dedupe de reentregas', () => {
     expect(await count()).toBe(1);
   });
 
+  it('entregas concurrentes del mismo id -> una sola fila y un solo trigger', async () => {
+    const p = await prospect();
+    const rs = await Promise.all([gw.handleIncoming(msg()), gw.handleIncoming(msg())]);
+    expect(rs.filter((r) => r?.triggerAgent)).toHaveLength(1);
+    expect(rs.filter((r) => r === null)).toHaveLength(1);
+    expect(await count()).toBe(1);
+    expect(p.id).toBeTypeOf('number');
+  });
+
   it('mismo fromMe dos veces -> una sola fila de lauri', async () => {
     const p = await prospect();
     expect(await gw.handleIncoming(msg({ fromMe: true, id: 'm-1' }))).not.toBeNull();
     expect(await gw.handleIncoming(msg({ fromMe: true, id: 'm-1' }))).toBeNull();
     expect((await repo.listMessages(db, p.id)).filter((x) => x.author === 'lauri')).toHaveLength(1);
+  });
+});
+
+describe('WaGateway.flushOutbox (robustez)', () => {
+  it('si markOutboxSent falla tras enviar, el siguiente flush no reenvía y reintenta el registro', async () => {
+    const p = await prospect();
+    let fail = true;
+    const flaky: Db = {
+      ...db,
+      query: (sql: string, params?: unknown[]) =>
+        fail && sql.includes("status='enviado'") ? Promise.reject(new Error('db caída')) : db.query(sql, params),
+    } as Db;
+    const gw2 = new WaGateway(flaky, tr, config);
+    const oid = await gw2.enqueueToProspect(p.id, 'hola');
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await gw2.flushOutbox(WEEKDAY);
+    fail = false;
+    await gw2.flushOutbox(WEEKDAY);
+    err.mockRestore();
+    expect(tr.sent).toHaveLength(1);
+    expect((await db.query<{ status: string }>('SELECT status FROM outbox WHERE id=$1', [oid]))[0].status).toBe('enviado');
+    expect((await repo.listMessages(db, p.id)).filter((m) => m.direction === 'out')).toHaveLength(1);
+  });
+
+  it('throw síncrono del transporte marca fallido y sigue', async () => {
+    const p = await prospect();
+    const a = await gw.enqueueToProspect(p.id, 'uno');
+    await gw.enqueueToOwner('dos');
+    const orig = tr.send;
+    let first = true;
+    tr.send = ((w: string, t: string) => { if (first) { first = false; throw new Error('sync'); } return orig(w, t); }) as typeof tr.send;
+    expect(await gw.flushOutbox(WEEKDAY)).toBe(1);
+    expect((await db.query<{ error: string }>('SELECT error FROM outbox WHERE id=$1', [a]))[0].error).toBe('sync');
   });
 });
 

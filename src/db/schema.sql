@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS messages_prospect_idx ON messages (prospect_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS messages_wa_message_id_uniq ON messages (wa_message_id) WHERE wa_message_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS outbox (
   id serial PRIMARY KEY,
