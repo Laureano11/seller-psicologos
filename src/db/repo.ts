@@ -384,3 +384,15 @@ export async function seedKnowledge(db: Db, contentDir: string): Promise<void> {
     await addVariant(db, readFileSync(join(contentDir, 'apertura.md'), 'utf8').replace(/<!--[\s\S]*?-->/g, '').trim(), 'activa');
   }
 }
+
+// ---------- ids de WhatsApp ----------
+
+/** ¿Este id de mensaje de WhatsApp fue enviado por el sistema (outbox o mensajes)? */
+export async function isSystemWaMessageId(db: Db, waMessageId: string): Promise<boolean> {
+  const r = await db.query(
+    `SELECT 1 FROM outbox WHERE wa_message_id=$1
+     UNION ALL SELECT 1 FROM messages WHERE wa_message_id=$1 AND direction='out' AND author='agent' LIMIT 1`,
+    [waMessageId],
+  );
+  return r.length > 0;
+}
