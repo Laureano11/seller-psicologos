@@ -210,6 +210,22 @@ describe('tick', () => {
     expect(runBuscador).toHaveBeenCalledTimes(2);
   });
 
+  it('idle(): resuelve recién cuando termina el tick en curso, aunque otro tick se solape', async () => {
+    let release!: () => void;
+    runBuscador.mockImplementation(() => new Promise<void>((r) => { release = r; }));
+    const first = orch.tick(MON_905);
+    await vi.waitFor(() => expect(runBuscador).toHaveBeenCalled());
+    await orch.tick(plus(MON_905, MIN)); // solapado
+    let idle = false;
+    const w = orch.idle().then(() => { idle = true; });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(idle).toBe(false);
+    release();
+    await first;
+    await w;
+    expect(idle).toBe(true);
+  });
+
   it('single-flight: un tick durante otro en curso retorna de inmediato', async () => {
     let release!: () => void;
     runBuscador.mockImplementation(() => new Promise<void>((r) => { release = r; }));

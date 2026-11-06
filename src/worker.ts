@@ -40,9 +40,8 @@ async function main() {
   });
   await transport.start();
 
-  let current: Promise<void> = Promise.resolve();
   const timer = setInterval(() => {
-    current = orch.tick(new Date()).catch((e) => console.error('[worker] error en tick', e));
+    orch.tick(new Date()).catch((e) => console.error('[worker] error en tick', e));
   }, 60_000);
 
   let closing = false;
@@ -50,7 +49,7 @@ async function main() {
     if (closing) return;
     closing = true;
     clearInterval(timer);
-    await current;
+    await orch.idle();
     await transport.stop?.().catch(() => {});
     await db.close().catch(() => {});
     process.exit(0);

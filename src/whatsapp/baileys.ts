@@ -24,6 +24,7 @@ export function createBaileysTransport(authDir: string): WaTransport {
   const logger = pino({ level: 'silent' });
   let sock: WASocket | undefined;
   let stopped = false;
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
   async function connect(): Promise<void> {
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
@@ -41,7 +42,7 @@ export function createBaileysTransport(authDir: string): WaTransport {
         } else {
           emitStatus({ state: 'desconectado' });
           if (stopped) return;
-          setTimeout(() => void connect().catch(() => emitStatus({ state: 'desconectado' })), 3000);
+          reconnectTimer = setTimeout(() => void connect().catch(() => emitStatus({ state: 'desconectado' })), 3000);
         }
       }
     });
@@ -62,6 +63,7 @@ export function createBaileysTransport(authDir: string): WaTransport {
   return {
     async stop() {
       stopped = true;
+      clearTimeout(reconnectTimer);
       sock?.end(undefined);
     },
     start: connect,

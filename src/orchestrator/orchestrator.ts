@@ -32,6 +32,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
   const alerted = new Set<string>();
   const lastFailure = new Map<string, Date>();
   let running = false;
+  let inFlight: Promise<void> = Promise.resolve();
   let waDownSince: Date | null = null;
   let waDownLogged = false;
 
@@ -47,6 +48,14 @@ export function createOrchestrator(deps: OrchestratorDeps) {
     if (!pending.includes(prospectId)) await kvSet(db, 'pending_inbound', [...pending, prospectId]);
   }
 
+  async function safeAddPending(prospectId: number): Promise<void> {
+    try {
+      await addPending(prospectId);
+    } catch (e) {
+      await logEvent(db, 'error', { paso: 'pending_inbound', prospectId, mensaje: errMsg(e) }).catch(() => {});
+    }
+  }
+
   async function runDue(now: Date): Promise<void> {
     const due = [...dueAt.entries()].filter(([, at]) => at.getTime() <= now.getTime());
     const errors: string[] = [];
@@ -56,7 +65,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
         await vendedor.handleInbound(prospectId, now);
       } catch (e) {
         errors.push(errMsg(e));
-        await addPending(prospectId); // no se pierde la respuesta: la reintenta el paso de reintentos
+        await safeAddPending(prospectId); // no se pierde la respuesta: la reintenta el paso de reintentos
       }
     }
     if (errors.length) throw new Error(errors.join('; '));
@@ -87,10 +96,20 @@ export function createOrchestrator(deps: OrchestratorDeps) {
     }
   }
 
-  async function tick(now: Date): Promise<void> {
-    if (running) return;
+  function tick(now: Date): Promise<void> {
+    if (running) return Promise.resolve();
     running = true;
-    try {
+    inFlight = doTick(now).finally(() => { running = false; });
+    return inFlight;
+  }
+
+  /** Resuelve cuando termina el tick en curso (si hay). */
+  async function idle(): Promise<void> {
+    await inFlight.catch(() => {});
+  }
+
+  async function doTick(now: Date): Promise<void> {
+    {
       const dt = local(now);
       const today = dt.toISODate()!;
 
@@ -141,7 +160,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
             await vendedor.handleInbound(id, now);
           } catch (e) {
             errors.push(errMsg(e));
-            await addPending(id);
+            await safeAddPending(id);
           }
         }
         if (errors.length) throw new Error(errors.join('; '));
@@ -162,8 +181,6 @@ export function createOrchestrator(deps: OrchestratorDeps) {
       });
 
       await step('outbox', async () => { await gateway.flushOutbox(now); });
-    } finally {
-      running = false;
     }
   }
 
@@ -179,7 +196,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
     }
   }
 
-  return { onIncoming, runDue, tick, onWaStatus };
+  return { onIncoming, runDue, tick, idle, onWaStatus };
 }
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
