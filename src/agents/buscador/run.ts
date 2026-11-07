@@ -1,114 +1,252 @@
 import type { Db } from '../../db/db.js';
 import type { Config } from '../../config.js';
-import type { Llm } from '../../llm/llm.js';
+import { AllProvidersFailedError, type Llm } from '../../llm/llm.js';
 import { reportDncStatus, type DncChecker } from '../../dnc.js';
 import type { WaTransport } from '../../whatsapp/transport.js';
 import { toWaId } from '../../phone.js';
 import { getProspectByWaId, insertProspect, isOptedOut, kvGet, kvSet, logEvent } from '../../db/repo.js';
 import { CITIES } from './cities.js';
-import { enrichFromWebsite } from './enrich.js';
-import type { ProspectSource, RawProspect } from './sources.js';
+import type { ProspectSource } from './sources.js';
+import type { Browser } from './browser.js';
+import { isBlacklisted, type EngineName, type SearchEngine } from './engines.js';
+import { extractContacts, fillQuery, hasPhoneHint, loadInstructions, loadQueries, looksLikeTeam } from './extract.js';
+
+export type StopReason =
+  | 'tope_prospectos' | 'tope_busquedas' | 'tope_paginas' | 'tope_whatsapp'
+  | 'captcha' | 'sin_ia' | 'cancelado' | 'sin_no_llame' | 'fin';
+
+export type BuscadorResult = {
+  found: number;
+  inserted: number;
+  skipped: Record<string, number>;
+  searches: number;
+  pages: number;
+  waChecks: number;
+  engine: EngineName | null;
+  captcha: boolean;
+  stopReason: StopReason;
+};
+
+export type BuscadorCursor = { city: number; query: number; page: number };
 
 export type BuscadorDeps = {
   db: Db;
   llm: Llm;
   dnc: DncChecker;
-  sources: ProspectSource[];
   wa: Pick<WaTransport, 'hasWhatsApp'>;
-  config: Pick<Config, 'buscadorMaxPerDay'>;
-  fetchFn?: typeof fetch;
+  /** Fuentes por ciudad (Google Places, si hay clave). */
+  sources: ProspectSource[];
+  /** Sin esto el Buscador solo usa las fuentes. */
+  openBrowser?: () => Promise<Browser>;
+  /** Motor principal primero; los siguientes son respaldo ante CAPTCHA. */
+  engines: SearchEngine[];
+  robots: { allowed(url: string): Promise<boolean> };
+  notifyOwner: (text: string) => Promise<unknown>;
+  contentDir: string;
+  config: Pick<Config, 'buscadorMaxPerDay' | 'buscador'>;
+  sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
 };
 
-export type BuscadorResult = { found: number; inserted: number; skipped: Record<string, number> };
+/** Páginas de resultados que se recorren por consulta antes de reiniciar el ciclo. */
+const MAX_RESULT_PAGES = 3;
+const ENGINE_LABEL: Record<EngineName, string> = { google: 'Google', duckduckgo: 'DuckDuckGo' };
+
+class Stop {
+  constructor(public reason: StopReason) {}
+}
+
+const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const isInt = (v: unknown, min: number, max: number): v is number => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
+
+/** Lee el cursor guardado; acepta el formato viejo (un número = índice de ciudad). */
+function readCursor(v: unknown, nQueries: number): BuscadorCursor {
+  if (isInt(v, 0, CITIES.length - 1)) return { city: v, query: 0, page: 1 };
+  if (v && typeof v === 'object') {
+    const c = v as Partial<BuscadorCursor>;
+    if (isInt(c.city, 0, CITIES.length - 1) && isInt(c.page, 1, MAX_RESULT_PAGES)) {
+      return { city: c.city, query: isInt(c.query, 0, nQueries - 1) ? c.query : 0, page: c.page };
+    }
+  }
+  return { city: 0, query: 0, page: 1 };
+}
+
+function advance(c: BuscadorCursor, nQueries: number): BuscadorCursor {
+  if (c.query + 1 < nQueries) return { ...c, query: c.query + 1 };
+  if (c.city + 1 < CITIES.length) return { city: c.city + 1, query: 0, page: c.page };
+  return { city: 0, query: 0, page: c.page >= MAX_RESULT_PAGES ? 1 : c.page + 1 };
+}
 
 /**
- * Orden por raw: si hay website y el teléfono de Places no corresponde a un prospecto ya existente, se enriquece
- * (el WhatsApp del sitio tiene prioridad); luego toWaId -> duplicado -> opt-out -> No Llame -> hasWhatsApp -> insert.
+ * Una corrida diaria. Por ciudad (desde el cursor): fuentes (Places) al empezar la ciudad, y con navegador
+ * cada consulta de content/buscador-consultas.md -> resultados -> páginas -> IA extrae {nombre, celular, email}.
+ * Filtros por contacto: equipo -> sin teléfono -> duplicado -> baja -> No Llame -> tope WhatsApp -> sin WhatsApp.
+ * Cortar por tope, CAPTCHA, falta de IA o cancelación es un final normal; solo errores inesperados lanzan.
  */
-export async function runBuscador(deps: BuscadorDeps, now: Date): Promise<BuscadorResult> {
-  const { db, llm, dnc, sources, wa, config } = deps;
-  const result: BuscadorResult = { found: 0, inserted: 0, skipped: {} };
+export async function runBuscador(deps: BuscadorDeps, now: Date, signal?: AbortSignal): Promise<BuscadorResult> {
+  const { db, llm, dnc, wa, config } = deps;
+  const lim = config.buscador;
+  const sleep = deps.sleep ?? realSleep;
+  const random = deps.random ?? Math.random;
+  const pause = ([a, b]: [number, number]) => sleep(a + (b - a) * random());
+  const result: BuscadorResult = {
+    found: 0, inserted: 0, skipped: {}, searches: 0, pages: 0, waChecks: 0, engine: null, captcha: false, stopReason: 'fin',
+  };
   const skip = (why: string) => { result.skipped[why] = (result.skipped[why] ?? 0) + 1; };
-  const max = config.buscadorMaxPerDay;
+  const finish = () => logEvent(db, 'buscador_run', { ...result, at: now.toISOString() });
 
-  // sin archivo No Llame no se agrega a nadie (bloqueado por configuración); ni se gasta la búsqueda
+  // sin archivo No Llame no se agrega a nadie (ni se abre el navegador)
   if (!(await reportDncStatus(db, dnc))) {
     skip('no_llame_sin_archivo');
-    await logEvent(db, 'buscador_run', { ...result, at: now.toISOString() });
+    result.stopReason = 'sin_no_llame';
+    await finish();
     return result;
   }
 
-  let cursor = (await kvGet<number>(db, 'buscador_cursor')) ?? 0;
-  if (!Number.isInteger(cursor) || cursor < 0 || cursor >= CITIES.length) cursor = 0;
+  const queries = loadQueries(deps.contentDir);
+  const instructions = loadInstructions(deps.contentDir);
+  let cursor = readCursor(await kvGet<unknown>(db, 'buscador_cursor'), queries.length);
+  let engineIdx = 0;
+  let warned = false;
+  const visited = new Set<string>();
 
-  async function processRaw(raw: RawProspect): Promise<void> {
+  const checkAbort = () => { if (signal?.aborted) throw new Stop('cancelado'); };
+
+  async function processContact(
+    c: { name: string; phone?: string; email?: string },
+    city: { city: string; province: string },
+    source: string,
+    sourceRef: string,
+  ): Promise<void> {
+    if (result.inserted >= config.buscadorMaxPerDay) throw new Stop('tope_prospectos');
     result.found++;
-    const placesWaId = raw.phone ? toWaId(raw.phone) : null;
-    if (placesWaId && (await getProspectByWaId(db, placesWaId))) return skip('duplicado');
-
-    const enr = await enrichFromWebsite(raw, { llm, fetchFn: deps.fetchFn });
-    const enrWaId = enr.whatsapp ? toWaId(enr.whatsapp) : null;
-    const waId = enrWaId ?? placesWaId;
-    if (!waId) return skip('sin_telefono');
-    if (await getProspectByWaId(db, waId)) return skip('duplicado');
-    if (await isOptedOut(db, waId)) return skip('opt_out');
-    if (await dnc.isBlocked(waId)) return skip('no_llame');
-    if (!(await wa.hasWhatsApp(waId))) return skip('sin_whatsapp');
-
-    const p = await insertProspect(db, {
-      name: raw.name,
-      phoneRaw: enrWaId ? enr.whatsapp : raw.phone,
-      waId,
-      email: enr.email,
-      city: raw.city,
-      province: raw.province,
-      address: raw.address,
-      website: raw.website,
-      source: raw.source,
-      sourceRef: raw.sourceRef,
-      profileUrls: raw.profileUrls ?? [],
-      practiceType: enr.practiceType,
-      toolsSignals: enr.toolsSignals,
-      fitNotes: enr.fitNotes,
-      attributes: enr.extra,
-      status: 'encontrado',
-    });
-    if (p) result.inserted++;
-    else skip('duplicado');
+    try {
+      if (looksLikeTeam(c.name)) return skip('equipo');
+      const waId = c.phone ? toWaId(c.phone) : null;
+      if (!waId) return skip('sin_telefono');
+      if (await getProspectByWaId(db, waId)) return skip('duplicado');
+      if (await isOptedOut(db, waId)) return skip('opt_out');
+      if (await dnc.isBlocked(waId)) return skip('no_llame');
+      if (result.waChecks >= lim.maxWaChecks) throw new Stop('tope_whatsapp');
+      result.waChecks++;
+      if (!(await wa.hasWhatsApp(waId))) return skip('sin_whatsapp');
+      const p = await insertProspect(db, {
+        name: c.name, phoneRaw: c.phone, waId, email: c.email, city: city.city, province: city.province,
+        source, sourceRef, status: 'encontrado',
+      });
+      if (p) result.inserted++;
+      else skip('duplicado');
+    } catch (e) {
+      if (e instanceof Stop) throw e;
+      skip('error');
+      await logEvent(db, 'buscador_raw_error', { name: c.name, sourceRef, error: e instanceof Error ? e.message : String(e) })
+        .catch(() => undefined);
+    }
   }
 
-  let visited = 0;
-  while (visited < CITIES.length && result.inserted < max) {
-    const q = CITIES[cursor]!;
-    let complete = true;
-    for (const src of sources) {
-      let raws: RawProspect[];
+  async function processSources(city: { city: string; province: string }): Promise<void> {
+    for (const src of deps.sources) {
+      let raws;
       try {
-        raws = await src.search(q);
+        raws = await src.search(city);
       } catch (e) {
-        await logEvent(db, 'buscador_source_error', {
-          source: src.name, city: q.city, error: e instanceof Error ? e.message : String(e),
-        });
+        await logEvent(db, 'buscador_source_error', { source: src.name, city: city.city, error: e instanceof Error ? e.message : String(e) });
         continue;
       }
       for (const raw of raws) {
-        if (result.inserted >= max) { complete = false; break; }
-        try {
-          await processRaw(raw);
-        } catch (e) {
-          skip('error');
-          await logEvent(db, 'buscador_raw_error', {
-            name: raw.name, sourceRef: raw.sourceRef, error: e instanceof Error ? e.message : String(e),
-          }).catch(() => undefined);
-        }
+        checkAbort();
+        await processContact({ name: raw.name, phone: raw.phone }, city, raw.source, raw.sourceRef);
       }
-      if (!complete) break;
     }
-    if (!complete) break; // el cursor queda en esta ciudad: la próxima corrida retoma (los ya insertados salen como duplicado)
-    cursor = (cursor + 1) % CITIES.length;
-    visited++;
   }
-  await kvSet(db, 'buscador_cursor', cursor);
-  await logEvent(db, 'buscador_run', { ...result, at: now.toISOString() });
+
+  async function warnCaptcha(blocked: SearchEngine, next: SearchEngine | undefined): Promise<void> {
+    if (warned) return;
+    warned = true;
+    const text = next
+      ? `⚠️ ${ENGINE_LABEL[blocked.name]} pidió CAPTCHA al Buscador. Sigo con ${ENGINE_LABEL[next.name]} por hoy.`
+      : `⚠️ ${ENGINE_LABEL[blocked.name]} pidió CAPTCHA al Buscador. Corto la búsqueda de hoy y retomo mañana.`;
+    await deps.notifyOwner(text).catch(() => undefined);
+  }
+
+  async function runQuery(browser: Browser, tpl: string, city: { city: string; province: string }): Promise<void> {
+    const query = fillQuery(tpl, city);
+    for (;;) {
+      checkAbort();
+      const engine = deps.engines[engineIdx]!;
+      if (result.searches >= lim.maxSearches) throw new Stop('tope_busquedas');
+      result.searches++;
+      let serp;
+      try {
+        serp = await browser.open(engine.searchUrl(query, cursor.page));
+      } catch {
+        skip('busqueda_error');
+        return;
+      }
+      if (engine.isBlocked(serp)) {
+        result.captcha = true;
+        engineIdx++;
+        const next = deps.engines[engineIdx];
+        await warnCaptcha(engine, next);
+        if (!next) throw new Stop('captcha');
+        continue; // misma consulta con el motor de respaldo
+      }
+      result.engine = engine.name;
+      const urls = engine.parseResults(serp).filter((u) => !isBlacklisted(u) && !visited.has(u)).slice(0, lim.resultsPerQuery);
+      for (const url of urls) {
+        checkAbort();
+        if (result.pages >= lim.maxPages) throw new Stop('tope_paginas');
+        if (!(await deps.robots.allowed(url))) { skip('robots'); continue; }
+        await pause(lim.pageDelayMs);
+        visited.add(url);
+        result.pages++;
+        let snap;
+        try {
+          snap = await browser.open(url);
+        } catch {
+          skip('pagina_error');
+          continue;
+        }
+        if (!hasPhoneHint(snap)) continue;
+        let contacts;
+        try {
+          contacts = await extractContacts(snap, { llm, instructions });
+        } catch (e) {
+          if (e instanceof AllProvidersFailedError) throw new Stop('sin_ia');
+          throw e;
+        }
+        for (const c of contacts) await processContact(c, city, engine.name, snap.url);
+      }
+      return;
+    }
+  }
+
+  let browser: Browser | undefined;
+  try {
+    if (deps.openBrowser) browser = await deps.openBrowser();
+    let citiesDone = 0;
+    for (;;) {
+      checkAbort();
+      if (result.inserted >= config.buscadorMaxPerDay) throw new Stop('tope_prospectos');
+      if (browser && result.searches >= lim.maxSearches) throw new Stop('tope_busquedas');
+      const city = CITIES[cursor.city]!;
+      if (cursor.query === 0 && (cursor.page === 1 || !browser)) await processSources(city);
+      if (browser) await runQuery(browser, queries[cursor.query]!, city);
+      cursor = browser ? advance(cursor, queries.length) : advance({ ...cursor, query: 0, page: 1 }, 1);
+      await kvSet(db, 'buscador_cursor', cursor);
+      if (!browser) {
+        if (++citiesDone >= CITIES.length) throw new Stop('fin');
+      } else {
+        await pause(lim.searchDelayMs);
+      }
+    }
+  } catch (e) {
+    if (!(e instanceof Stop)) throw e;
+    result.stopReason = e.reason;
+  } finally {
+    await browser?.close();
+  }
+  await kvSet(db, 'buscador_cursor', cursor); // un corte a mitad de consulta la repite en la próxima corrida
+  await finish();
   return result;
 }

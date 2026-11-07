@@ -7,6 +7,9 @@ import { createLlm } from './llm/llm.js';
 import { createDncChecker, reportDncStatus } from './dnc.js';
 import { createGooglePlacesSource, type ProspectSource } from './agents/buscador/sources.js';
 import { runBuscador } from './agents/buscador/run.js';
+import { launchBrowser } from './agents/buscador/browser.js';
+import { ENGINES } from './agents/buscador/engines.js';
+import { createRobotsChecker } from './agents/buscador/robots.js';
 import { createGoogleServices } from './agents/agenda/google.js';
 import { createVendedor } from './agents/vendedor/vendedor.js';
 import { runWeeklyAnalysis } from './learning/analysis.js';
@@ -28,9 +31,18 @@ async function main() {
   const google = config.google ? createGoogleServices(config.google) : undefined;
   const vendedor = createVendedor({ db, llm, gateway, calendar: google?.calendar, mail: google?.mail, config });
 
+  const primary = config.buscador.engine;
+  const buscadorDeps = {
+    db, llm, dnc, sources, wa: transport, config, contentDir: config.contentDir,
+    openBrowser: () => launchBrowser({ profileDir: config.buscador.profileDir, tz: config.tz }),
+    engines: [ENGINES[primary], ENGINES[primary === 'google' ? 'duckduckgo' : 'google']],
+    robots: createRobotsChecker(),
+    notifyOwner: (t: string) => gateway.enqueueToOwner(t),
+  };
+
   const orch = createOrchestrator({
     db, config, gateway, vendedor,
-    runBuscador: (now) => runBuscador({ db, llm, dnc, sources, wa: transport, config }, now),
+    runBuscador: (now) => runBuscador(buscadorDeps, now),
     runWeeklyAnalysis: (now) => runWeeklyAnalysis({ db, llm, config }, now),
   });
 
@@ -60,7 +72,7 @@ async function main() {
   process.on('SIGINT', shutdown);
 
   console.log(
-    `[worker] iniciado: tz=${config.tz} buscador=${sources.length ? 'places' : 'sin fuentes'} google=${google ? 'si' : 'no'} dnc=${config.dncMode}`,
+    `[worker] iniciado: tz=${config.tz} buscador=${sources.length ? 'navegador+places' : 'navegador'} google=${google ? 'si' : 'no'} dnc=${config.dncMode}`,
   );
 }
 

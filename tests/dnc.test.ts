@@ -44,7 +44,8 @@ describe('dnc', () => {
       const wa = createFakeTransport();
       wa.whatsappNumbers.add('5491111111111');
       const r = await runBuscador({
-        db, dnc: c, wa, config: { buscadorMaxPerDay: 50 },
+        db, dnc: c, wa, config: { buscadorMaxPerDay: 50, buscador: loadConfig({ DATABASE_URL: 'x', OWNER_WA_ID: '5491155551234', DNC_MODE: 'off' }).buscador },
+        engines: [], robots: { allowed: async () => true }, notifyOwner: async () => undefined, contentDir: 'content',
         llm: createFakeLlm(() => { throw new Error('no debería llamarse'); }),
         sources: [{ name: 'fake', search: async () => { searched++; return [{ name: 'X', phone: '11 1111-1111', city: 'CABA', province: 'CABA', source: 'fake', sourceRef: 'x' }]; } }],
       }, new Date());
