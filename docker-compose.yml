@@ -22,8 +22,10 @@ services:
     environment:
       TZ: America/Argentina/Buenos_Aires
       DATABASE_URL: postgres://seller:seller@db:5432/seller
+      BUSCADOR_PROFILE_DIR: /app/browser_profile
     volumes:
       - wa_auth:/app/wa_auth
+      - browser_profile:/app/browser_profile
       - ./data:/app/data:ro
       - ./content:/app/content
     depends_on:
@@ -58,3 +60,4 @@ services:
 volumes:
   pgdata:
   wa_auth:
+  browser_profile:
