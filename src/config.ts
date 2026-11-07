@@ -9,6 +9,16 @@ export type Config = {
   meetingMinutes: number;
   searchHour: number;
   buscadorMaxPerDay: number;
+  buscador: {
+    maxSearches: number;
+    maxPages: number;
+    resultsPerQuery: number;
+    maxWaChecks: number;
+    searchDelayMs: [number, number];
+    pageDelayMs: [number, number];
+    engine: 'google' | 'duckduckgo';
+    profileDir: string;
+  };
   followupDays: number;
   closeAfterDays: number;
   maxFollowups: number;
@@ -45,6 +55,22 @@ export function loadConfig(env: Env): Config {
     return n;
   };
 
+  /** Rango en segundos "a-b" -> [ms, ms], con 0 <= a <= b. */
+  const range = (k: string, def: [number, number]): [number, number] => {
+    const v = env[k]?.trim();
+    if (!v) return [def[0] * 1000, def[1] * 1000];
+    const m = /^(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)$/.exec(v);
+    const a = m ? Number(m[1]) : NaN;
+    const b = m ? Number(m[2]) : NaN;
+    if (!m || a > b) throw new Error(`${k} debe ser un rango en segundos "min-max" (recibido "${v}")`);
+    return [a * 1000, b * 1000];
+  };
+
+  const engine = env.BUSCADOR_ENGINE?.trim() || 'google';
+  if (engine !== 'google' && engine !== 'duckduckgo') {
+    throw new Error(`BUSCADOR_ENGINE debe ser "google" o "duckduckgo" (recibido "${engine}")`);
+  }
+
   const dncMode = (env.DNC_MODE?.trim() || 'file') as string;
   if (dncMode !== 'file' && dncMode !== 'off') throw new Error(`DNC_MODE debe ser "file" u "off" (recibido "${dncMode}")`);
   const dncFile = env.DNC_FILE?.trim() || undefined;
@@ -79,6 +105,16 @@ export function loadConfig(env: Env): Config {
     meetingMinutes: num('MEETING_MINUTES', 30),
     searchHour: num('SEARCH_HOUR', 9),
     buscadorMaxPerDay: num('BUSCADOR_MAX_PER_DAY', 50),
+    buscador: {
+      maxSearches: num('BUSCADOR_MAX_SEARCHES', 25),
+      maxPages: num('BUSCADOR_MAX_PAGES', 150),
+      resultsPerQuery: num('BUSCADOR_RESULTS_PER_QUERY', 10),
+      maxWaChecks: num('BUSCADOR_MAX_WA_CHECKS', 150),
+      searchDelayMs: range('BUSCADOR_SEARCH_DELAY', [20, 60]),
+      pageDelayMs: range('BUSCADOR_PAGE_DELAY', [3, 8]),
+      engine,
+      profileDir: env.BUSCADOR_PROFILE_DIR?.trim() || 'browser_profile',
+    },
     followupDays: num('FOLLOWUP_DAYS', 3),
     closeAfterDays: num('CLOSE_AFTER_DAYS', 4),
     maxFollowups: num('MAX_FOLLOWUPS', 1),

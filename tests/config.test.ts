@@ -59,3 +59,24 @@ describe('loadConfig', () => {
     expect(loadConfig({ ...base, OWNER_WA_ID: '1234567890' }).ownerWaId).toBe('1234567890');
   });
 });
+
+describe('loadConfig: buscador', () => {
+  it('buscador: defaults', () => {
+    expect(loadConfig(base).buscador).toEqual({
+      maxSearches: 25, maxPages: 150, resultsPerQuery: 10, maxWaChecks: 150,
+      searchDelayMs: [20000, 60000], pageDelayMs: [3000, 8000], engine: 'google', profileDir: 'browser_profile',
+    });
+  });
+  it('buscador: rango "5-10" -> [5000, 10000]', () => {
+    expect(loadConfig({ ...base, BUSCADOR_SEARCH_DELAY: '5-10' }).buscador.searchDelayMs).toEqual([5000, 10000]);
+    expect(loadConfig({ ...base, BUSCADOR_PAGE_DELAY: ' 0-2 ' }).buscador.pageDelayMs).toEqual([0, 2000]);
+  });
+  it('buscador: rango inválido lanza nombrando la variable', () => {
+    expect(() => loadConfig({ ...base, BUSCADOR_SEARCH_DELAY: '10-5' })).toThrow(/BUSCADOR_SEARCH_DELAY/);
+    expect(() => loadConfig({ ...base, BUSCADOR_PAGE_DELAY: 'abc' })).toThrow(/BUSCADOR_PAGE_DELAY/);
+  });
+  it('buscador: BUSCADOR_ENGINE inválido lanza', () => {
+    expect(() => loadConfig({ ...base, BUSCADOR_ENGINE: 'bing' })).toThrow(/BUSCADOR_ENGINE/);
+    expect(loadConfig({ ...base, BUSCADOR_ENGINE: 'duckduckgo' }).buscador.engine).toBe('duckduckgo');
+  });
+});
