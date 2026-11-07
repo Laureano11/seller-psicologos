@@ -83,7 +83,7 @@ Qué resultados abrir y quién de cada página es un psicólogo con celular.
 - Inventar datos: nombre, celular y email salen textuales de la página.
 - Resolver o esquivar CAPTCHAs, entrar a páginas con login o completar formularios.
 - Usar LinkedIn o redes sociales.
-- Pasarse de los topes por corrida: **50 prospectos** (`BUSCADOR_MAX_PER_DAY`), 25 búsquedas, 150 páginas y **150 consultas a WhatsApp**. Todos se configuran en `.env`.
+- Pasarse de los topes: **50 prospectos** (`BUSCADOR_MAX_PER_DAY`), 25 búsquedas y 150 páginas por corrida, y **150 consultas a WhatsApp por día** (con una pausa de 2 a 6 s antes de cada una; un número sin WhatsApp no se vuelve a consultar en 60 días). Todos los topes se configuran en `.env`.
 
 ### Estado
 ✅ Implementado (navegador, Bing con respaldo, ficha mínima, segundo plano).

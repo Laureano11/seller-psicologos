@@ -43,7 +43,16 @@ El worker la lanza en el próximo minuto, si ya pasó `SEARCH_HOUR`. El resultad
 
 - Al llegar a un tope, si todos los buscadores piden CAPTCHA o si no hay IA disponible: termina normalmente, guarda el cursor y retoma al día siguiente.
 - Si un buscador pide CAPTCHA, te avisa por WhatsApp una vez y sigue con el siguiente.
-- Solo un error inesperado (por ejemplo, que Chromium no arranque) cuenta como falla y dispara la alerta "falló 3 veces seguidas".
+- Si Chromium no arranca, te avisa y ese día busca solo con Google Places (si hay clave).
+- Si se apaga el worker en medio de una corrida, se corta en la próxima pausa y el día **no** queda marcado como hecho: al reiniciar sigue desde el cursor.
+- Solo un error inesperado (por ejemplo, que se caiga la base de datos) cuenta como falla: se reintenta a los 30 minutos y dispara la alerta "falló 3 veces seguidas".
+
+## Protección del número de WhatsApp
+
+- Tope de `BUSCADOR_MAX_WA_CHECKS` (150) consultas "¿tiene WhatsApp?" **por día**, aunque haya varias corridas (contador en `kv`, clave `buscador_wa_checks`).
+- Pausa aleatoria de 2 a 6 s antes de cada consulta.
+- Un número sin WhatsApp se recuerda 60 días y no se vuelve a consultar (`kv`, clave `buscador_sin_wa`).
+- La IA no puede "completar" números: el celular tiene que coincidir con uno escrito en la página.
 
 ## Pruebas
 

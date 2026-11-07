@@ -64,6 +64,8 @@ async function main() {
     clearInterval(timer);
     orch.stop();
     await orch.idle();
+    // la corrida del Buscador se corta en su próxima pausa o página; se le dan hasta 8 s para cerrar y guardar el cursor
+    await Promise.race([orch.idleBuscador(), new Promise((r) => setTimeout(r, 8_000))]);
     await transport.stop?.().catch(() => {});
     await db.close().catch(() => {});
     process.exit(0);

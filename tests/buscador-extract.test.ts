@@ -84,6 +84,15 @@ describe('extractContacts', () => {
     const out = await extractContacts(snap('Lic. Real tel 351-612-3456'), { llm, instructions: 'I' });
     expect(out.map((c) => c.name)).toEqual(['Lic. Real']);
   });
+  it('descarta un número al que la IA le inventó la característica', async () => {
+    const llm = createFakeLlm(() => ({ contacts: [{ name: 'Lic. Ana', phone: '351 612 3456' }] }));
+    expect(await extractContacts(snap('Lic. Ana cel 15 612-3456'), { llm, instructions: 'I' })).toEqual([]);
+  });
+  it('acepta el mismo número escrito con o sin 15 / +54 9', async () => {
+    const llm = createFakeLlm(() => ({ contacts: [{ name: 'Lic. Ana', phone: '3516123456' }, { name: 'Lic. Bea', phone: '+54 9 11 2222-3333' }] }));
+    const out = await extractContacts(snap('Ana 351 15-612-3456 / Bea 011 15 2222-3333'), { llm, instructions: 'I' });
+    expect(out.map((c) => c.name)).toEqual(['Lic. Ana', 'Lic. Bea']);
+  });
   it('email vacío se omite', async () => {
     const llm = createFakeLlm(() => ({ contacts: [{ name: 'Lic. Real', phone: '3516123456', email: '' }] }));
     expect(await extractContacts(snap('3516123456'), { llm, instructions: 'I' })).toEqual([{ name: 'Lic. Real', phone: '3516123456' }]);

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { AllProvidersFailedError, type Llm } from '../../llm/llm.js';
 import type { PageSnapshot } from './browser.js';
+import { toWaId } from '../../phone.js';
 
 export type Contact = { name: string; phone: string; email?: string };
 
@@ -88,10 +89,12 @@ export async function extractContacts(s: PageSnapshot, deps: { llm: Llm; instruc
     if (e instanceof AllProvidersFailedError) throw e;
     return [];
   }
-  const runs = phoneRuns(s);
+  // el número de la IA tiene que ser el mismo (normalizado) que alguno escrito en la página:
+  // tolera "15" / "+54 9" pero no una característica inventada
+  const pageIds = new Set(phoneRuns(s).map(toWaId).filter((id): id is string => id !== null));
   const inPage = (phone: string) => {
-    const tail = digits(phone).slice(-7);
-    return tail.length === 7 && runs.some((r) => r.includes(tail));
+    const id = toWaId(phone);
+    return id !== null && pageIds.has(id);
   };
   return out.contacts
     .filter((c) => c.name.trim() && inPage(c.phone))

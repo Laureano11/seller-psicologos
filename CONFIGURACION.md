@@ -143,7 +143,7 @@ Recordá que usar WhatsApp personal con automatización va contra los términos 
 | `BUSCADOR_MAX_SEARCHES` | 25 | Búsquedas en el buscador web por corrida. |
 | `BUSCADOR_MAX_PAGES` | 150 | Páginas abiertas por corrida. |
 | `BUSCADOR_RESULTS_PER_QUERY` | 10 | Resultados que abre de cada búsqueda. |
-| `BUSCADOR_MAX_WA_CHECKS` | 150 | Consultas a WhatsApp ("¿tiene WhatsApp?") por corrida. Protege tu número. |
+| `BUSCADOR_MAX_WA_CHECKS` | 150 | Consultas a WhatsApp ("¿tiene WhatsApp?") por día. Protege tu número. |
 | `BUSCADOR_SEARCH_DELAY` | 20-60 | Pausa aleatoria entre búsquedas, en segundos. |
 | `BUSCADOR_PAGE_DELAY` | 3-8 | Pausa aleatoria entre páginas, en segundos. |
 | `BUSCADOR_ENGINE` | bing | Motor principal: `bing`, `google` o `duckduckgo`. Los otros quedan de respaldo. |

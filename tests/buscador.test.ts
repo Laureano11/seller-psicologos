@@ -134,7 +134,7 @@ describe('runBuscador: navegador', () => {
     expect(r).toMatchObject({ searches: 1, pages: 1, waChecks: 1, engine: 'google', captcha: false, stopReason: 'tope_busquedas' });
   });
 
-  it('filtros en orden: equipo, sin_telefono, duplicado, opt_out, no_llame, sin_whatsapp', async () => {
+  it('filtros en orden: equipo, duplicado, opt_out, no_llame, sin_whatsapp (un número inválido ya lo descarta la extracción)', async () => {
     await repo.insertProspect(db, { name: 'Existente', waId: '5491122222222' });
     await db.query("INSERT INTO opt_outs (wa_id) VALUES ('5491144444444')");
     const people = [
@@ -144,7 +144,7 @@ describe('runBuscador: navegador', () => {
     const w = mkWorld({ [gUrl(Q1)]: results(gUrl(Q1), [R]), [R]: page(R, people) }, { [R]: people });
     const r = await runBuscador(w.deps, new Date());
     expect(r.inserted).toBe(1);
-    expect(r.skipped).toEqual({ equipo: 1, sin_telefono: 1, duplicado: 1, opt_out: 1, no_llame: 1, sin_whatsapp: 1 });
+    expect(r.skipped).toEqual({ equipo: 1, duplicado: 1, opt_out: 1, no_llame: 1, sin_whatsapp: 1 });
     expect(r.waChecks).toBe(2);
   });
 
@@ -197,9 +197,11 @@ describe('runBuscador: navegador', () => {
     const r1 = await runBuscador(mkWorld(pages, { [R]: people }, { maxPerDay: 2 }).deps, new Date());
     expect(r1).toMatchObject({ inserted: 2, stopReason: 'tope_prospectos' });
     await db.query('DELETE FROM prospects');
+    await db.query("DELETE FROM kv");
     const r2 = await runBuscador(mkWorld(pages, { [R]: people }, { buscador: { maxPages: 1 } }).deps, new Date());
     expect(r2).toMatchObject({ pages: 1, stopReason: 'tope_paginas' });
     await db.query('DELETE FROM prospects');
+    await db.query("DELETE FROM kv"); // contador diario de WhatsApp y cursor
     const r3 = await runBuscador(mkWorld(pages, { [R]: people }, { buscador: { maxWaChecks: 1 } }).deps, new Date());
     expect(r3).toMatchObject({ waChecks: 1, inserted: 1, stopReason: 'tope_whatsapp' });
   });
@@ -301,6 +303,59 @@ describe('runBuscador: navegador', () => {
     const w = mkWorld({ [gUrl(Q1)]: results(gUrl(Q1), [R]), [R]: page(R, [c('Lic. Ana', '11 1111-1111')]) }, {}, { llm: createFakeLlm((a) => { system = a.system; return { contacts: [] }; }) });
     await runBuscador(w.deps, new Date());
     expect(system).toBe('INSTRUCCIONES');
+  });
+});
+
+describe('runBuscador: protección de WhatsApp y robustez', () => {
+  const R = 'https://ana.com/contacto';
+  const today = () => new Date().toISOString().slice(0, 10);
+  it('el tope de consultas a WhatsApp es por día, no por corrida', async () => {
+    await repo.kvSet(db, 'buscador_wa_checks', { date: today(), n: 1 });
+    const w = mkWorld({ [gUrl(Q1)]: results(gUrl(Q1), [R]), [R]: page(R, [c('Lic. Ana', '11 1111-1111')]) }, { [R]: [c('Lic. Ana', '11 1111-1111')] }, { buscador: { maxWaChecks: 1 } });
+    const r = await runBuscador(w.deps, new Date());
+    expect(r).toMatchObject({ waChecks: 0, stopReason: 'tope_whatsapp' });
+  });
+  it('el contador diario de WhatsApp se guarda aunque la corrida lance', async () => {
+    const w = mkWorld({ [gUrl(Q1)]: results(gUrl(Q1), [R]), [R]: page(R, [c('Lic. Ana', '11 1111-1111')]) }, { [R]: [c('Lic. Ana', '11 1111-1111')] });
+    const bad = { ...w.deps, sleep: async () => {}, robots: { allowed: async () => true } };
+    let n = 0;
+    bad.engines = [{ ...ENGINES.google, parseResults: (s: PageSnapshot) => { if (n++ > 0) throw new Error('x'); return ENGINES.google.parseResults(s); } }];
+    await runBuscador(bad, new Date());
+    expect(await repo.kvGet(db, 'buscador_wa_checks')).toEqual({ date: today(), n: 1 });
+  });
+  it('un número sin WhatsApp no se vuelve a consultar (ni en la misma corrida ni en la siguiente)', async () => {
+    const R2 = 'https://b.com/x';
+    const w = mkWorld(
+      { [gUrl(Q1)]: results(gUrl(Q1), [R, R2]), [R]: page(R, [c('Lic. Fijo', '11 5555-5555')]), [R2]: page(R2, [c('Lic. Fijo', '11 5555-5555')]) },
+      { [R]: [c('Lic. Fijo', '11 5555-5555')], [R2]: [c('Lic. Fijo', '11 5555-5555')] },
+    );
+    const r1 = await runBuscador(w.deps, new Date());
+    expect(r1.waChecks).toBe(1);
+    expect(r1.skipped.sin_whatsapp).toBe(2);
+    await repo.kvSet(db, 'buscador_cursor', { city: 0, query: 0, page: 1 });
+    const w2 = mkWorld({ [gUrl(Q1)]: results(gUrl(Q1), [R]), [R]: page(R, [c('Lic. Fijo', '11 5555-5555')]) }, { [R]: [c('Lic. Fijo', '11 5555-5555')] });
+    const r2 = await runBuscador(w2.deps, new Date());
+    expect(r2.waChecks).toBe(0);
+    expect(r2.skipped.sin_whatsapp).toBe(1);
+  });
+  it('pausa antes de cada consulta a WhatsApp', async () => {
+    const pauses: number[] = [];
+    const w = mkWorld({ [gUrl(Q1)]: results(gUrl(Q1), [R]), [R]: page(R, [c('Lic. Ana', '11 1111-1111')]) }, { [R]: [c('Lic. Ana', '11 1111-1111')] }, { sleep: async (ms: number) => { pauses.push(ms); }, random: () => 0 });
+    await runBuscador(w.deps, new Date());
+    expect(pauses).toContain(2000);
+  });
+  it('abortar durante una pausa corta la corrida enseguida', async () => {
+    const ac = new AbortController();
+    const w = mkWorld({ [gUrl(Q1)]: results(gUrl(Q1), []) }, {}, { sleep: () => new Promise<void>(() => {}), buscador: { maxSearches: 5 } });
+    const run = runBuscador(w.deps, new Date(), ac.signal);
+    setTimeout(() => ac.abort(), 50);
+    expect((await run).stopReason).toBe('cancelado');
+  });
+  it('si el navegador no arranca: avisa y sigue con las fuentes (Places)', async () => {
+    const w = mkWorld({}, {}, { openBrowser: async () => { throw new Error('chromium no instalado'); }, sources: [sourceOf([raw('Lic. P', '11 1111-1111')])] });
+    const r = await runBuscador(w.deps, new Date());
+    expect(r.inserted).toBe(1);
+    expect(w.notes).toEqual(['⚠️ El Buscador no pudo abrir el navegador (chromium no instalado). Hoy busco solo con Google Places.']);
   });
 });
 

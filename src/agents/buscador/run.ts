@@ -50,6 +50,11 @@ export type BuscadorDeps = {
 
 /** Páginas de resultados que se recorren por consulta antes de reiniciar el ciclo. */
 const MAX_RESULT_PAGES = 3;
+/** Pausa aleatoria antes de cada consulta "¿tiene WhatsApp?" (protege el número de Lauri). */
+const WA_CHECK_DELAY_MS: [number, number] = [2000, 6000];
+/** Días que se recuerda un número sin WhatsApp para no volver a consultarlo. */
+const NO_WA_TTL_DAYS = 60;
+const DAY_MS = 86_400_000;
 const ENGINE_LABEL: Record<EngineName, string> = { bing: 'Bing', google: 'Google', duckduckgo: 'DuckDuckGo' };
 
 class Stop {
@@ -88,7 +93,17 @@ export async function runBuscador(deps: BuscadorDeps, now: Date, signal?: AbortS
   const lim = config.buscador;
   const sleep = deps.sleep ?? realSleep;
   const random = deps.random ?? Math.random;
-  const pause = ([a, b]: [number, number]) => sleep(a + (b - a) * random());
+  // pausa que se corta al abortar (apagado del worker)
+  const pause = async ([a, b]: [number, number]) => {
+    if (signal?.aborted) return;
+    let onAbort!: () => void;
+    const aborted = new Promise<void>((r) => { onAbort = r; signal?.addEventListener('abort', onAbort, { once: true }); });
+    try {
+      await Promise.race([sleep(a + (b - a) * random()), aborted]);
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
+  };
   const result: BuscadorResult = {
     found: 0, inserted: 0, skipped: {}, searches: 0, pages: 0, waChecks: 0, engine: null, captcha: false, stopReason: 'fin',
   };
@@ -110,6 +125,14 @@ export async function runBuscador(deps: BuscadorDeps, now: Date, signal?: AbortS
   let warned = false;
   const visited = new Set<string>();
 
+  // tope de consultas a WhatsApp por DÍA (sobrevive a corridas que fallan y se relanzan)
+  const today = now.toISOString().slice(0, 10);
+  const prevChecks = await kvGet<{ date: string; n: number }>(db, 'buscador_wa_checks');
+  const usedBefore = prevChecks?.date === today && Number.isFinite(prevChecks.n) ? prevChecks.n : 0;
+  // números sin WhatsApp ya consultados (con fecha), para no repetir la consulta
+  const noWa = new Map<string, string>(Object.entries((await kvGet<Record<string, string>>(db, 'buscador_sin_wa')) ?? {}));
+  for (const [id, at] of noWa) if (now.getTime() - Date.parse(at) > NO_WA_TTL_DAYS * DAY_MS) noWa.delete(id);
+
   const checkAbort = () => { if (signal?.aborted) throw new Stop('cancelado'); };
 
   async function processContact(
@@ -127,9 +150,15 @@ export async function runBuscador(deps: BuscadorDeps, now: Date, signal?: AbortS
       if (await getProspectByWaId(db, waId)) return skip('duplicado');
       if (await isOptedOut(db, waId)) return skip('opt_out');
       if (await dnc.isBlocked(waId)) return skip('no_llame');
-      if (result.waChecks >= lim.maxWaChecks) throw new Stop('tope_whatsapp');
+      if (noWa.has(waId)) return skip('sin_whatsapp');
+      if (usedBefore + result.waChecks >= lim.maxWaChecks) throw new Stop('tope_whatsapp');
+      await pause(WA_CHECK_DELAY_MS);
+      checkAbort();
       result.waChecks++;
-      if (!(await wa.hasWhatsApp(waId))) return skip('sin_whatsapp');
+      if (!(await wa.hasWhatsApp(waId))) {
+        noWa.set(waId, now.toISOString());
+        return skip('sin_whatsapp');
+      }
       const p = await insertProspect(db, {
         name: c.name, phoneRaw: c.phone, waId, email: c.email, city: city.city, province: city.province,
         source, sourceRef, status: 'encontrado',
@@ -228,7 +257,16 @@ export async function runBuscador(deps: BuscadorDeps, now: Date, signal?: AbortS
 
   let browser: Browser | undefined;
   try {
-    if (deps.openBrowser) browser = await deps.openBrowser();
+    if (deps.openBrowser) {
+      try {
+        browser = await deps.openBrowser();
+      } catch (e) {
+        // sin navegador se sigue con las fuentes (Places), como antes
+        const why = e instanceof Error ? e.message : String(e);
+        await logEvent(db, 'buscador_browser_error', { error: why });
+        await deps.notifyOwner(`⚠️ El Buscador no pudo abrir el navegador (${why}). Hoy busco solo con Google Places.`).catch(() => undefined);
+      }
+    }
     let citiesDone = 0;
     for (;;) {
       checkAbort();
@@ -250,6 +288,9 @@ export async function runBuscador(deps: BuscadorDeps, now: Date, signal?: AbortS
     result.stopReason = e.reason;
   } finally {
     await browser?.close();
+    // se guardan siempre, también si la corrida lanza
+    await kvSet(db, 'buscador_wa_checks', { date: today, n: usedBefore + result.waChecks }).catch(() => undefined);
+    await kvSet(db, 'buscador_sin_wa', Object.fromEntries(noWa)).catch(() => undefined);
   }
   await kvSet(db, 'buscador_cursor', cursor); // un corte a mitad de consulta la repite en la próxima corrida
   await finish();

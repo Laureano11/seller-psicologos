@@ -111,6 +111,26 @@ describe('tick', () => {
     await tickWait(MON_905);
     expect(await repo.kvGet(db, 'buscador_last_date')).toBe('2026-11-09');
   });
+  it('una corrida que falla tarde: el backoff cuenta desde la falla, no desde el inicio', async () => {
+    let fail!: (e: Error) => void;
+    runBuscador.mockImplementation(() => new Promise((_r, rej) => { fail = rej; }));
+    await orch.tick(MON_905);
+    await orch.tick(plus(MON_905, 50 * MIN)); // sigue corriendo
+    fail(new Error('db caída'));
+    await orch.idleBuscador();
+    await tickWait(plus(MON_905, 51 * MIN));
+    expect(runBuscador).toHaveBeenCalledTimes(1);
+    runBuscador.mockResolvedValue({});
+    await tickWait(plus(MON_905, 81 * MIN));
+    expect(runBuscador).toHaveBeenCalledTimes(2);
+  });
+  it('una corrida cancelada por stop() no marca el día como hecho', async () => {
+    runBuscador.mockImplementation((_now, s) => new Promise<void>((r) => s.addEventListener('abort', () => r())));
+    await orch.tick(MON_905);
+    orch.stop();
+    await orch.idleBuscador();
+    expect(await repo.kvGet(db, 'buscador_last_date')).toBeFalsy();
+  });
   it('stop() aborta el signal pasado a runBuscador', async () => {
     let signal!: AbortSignal;
     runBuscador.mockImplementation((_now, s) => { signal = s; return new Promise<void>((r) => s.addEventListener('abort', () => r())); });

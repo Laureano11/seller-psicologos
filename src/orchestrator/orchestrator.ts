@@ -41,6 +41,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
   let waDownLogged = false;
   let buscadorRun: Promise<void> | null = null;
   let buscadorAbort: AbortController | null = null;
+  let lastTickAt: Date | null = null; // hora del último tick: aproxima cuándo falló una tarea en segundo plano
 
   const local = (now: Date) => DateTime.fromJSDate(now, { zone: config.tz });
 
@@ -143,10 +144,12 @@ export function createOrchestrator(deps: OrchestratorDeps) {
     buscadorRun = (async () => {
       try {
         await deps.runBuscador(now, ac.signal);
-        await kvSet(db, 'buscador_last_date', today);
+        // cancelada al apagar: no cuenta como hecha, se retoma al reiniciar (el tope diario de WhatsApp persiste)
+        if (!ac.signal.aborted) await kvSet(db, 'buscador_last_date', today);
         recordSuccess('buscador');
       } catch (e) {
-        await recordFailure('buscador', e, now);
+        // el backoff cuenta desde la falla (último tick), no desde el inicio de la corrida
+        await recordFailure('buscador', e, lastTickAt ?? now);
       } finally {
         buscadorRun = null;
         buscadorAbort = null;
@@ -177,6 +180,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
   }
 
   async function doTick(now: Date): Promise<void> {
+    lastTickAt = now;
     {
       const dt = local(now);
       const today = dt.toISODate()!;
