@@ -4,6 +4,7 @@ import * as repo from '../src/db/repo.js';
 import { WaGateway } from '../src/whatsapp/gateway.js';
 import { createFakeTransport, type FakeTransport, type IncomingMsg } from '../src/whatsapp/transport.js';
 import { createOrchestrator } from '../src/orchestrator/orchestrator.js';
+import { forceBuscadorToday } from '../src/agents/buscador/run.js';
 import { parseWindow } from '../src/time.js';
 import type { Config } from '../src/config.js';
 
@@ -23,7 +24,7 @@ let db: Db;
 let tr: FakeTransport;
 let gw: WaGateway;
 let vendedor: { handleInbound: ReturnType<typeof vi.fn>; startConversation: ReturnType<typeof vi.fn>; runFollowups: ReturnType<typeof vi.fn> };
-let runBuscador: Mock<(now: Date) => Promise<unknown>>;
+let runBuscador: Mock<(now: Date, signal: AbortSignal) => Promise<unknown>>;
 let runWeeklyAnalysis: Mock<(now: Date) => Promise<unknown>>;
 let orch: ReturnType<typeof createOrchestrator>;
 
@@ -51,6 +52,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => { await db.close(); });
+
+/** Tick + espera a que termine la corrida del Buscador lanzada en segundo plano. */
+const tickWait = async (t: Date) => { await orch.tick(t); await orch.idleBuscador(); };
 
 describe('debounce', () => {
   it('tres mensajes seguidos -> una sola respuesta tras la pausa', async () => {
@@ -82,6 +86,46 @@ describe('tick', () => {
     expect(runBuscador).toHaveBeenCalledTimes(1);
   });
 
+  it('buscador corre en segundo plano: el tick termina aunque runBuscador no haya resuelto', async () => {
+    let release!: () => void;
+    runBuscador.mockImplementation(() => new Promise<void>((r) => { release = r; }));
+    const flush = vi.spyOn(gw, 'flushOutbox');
+    await orch.tick(MON_905);
+    expect(runBuscador).toHaveBeenCalledTimes(1);
+    expect(flush).toHaveBeenCalledTimes(1); // el tick llegó al final sin esperar al Buscador
+    expect(await repo.kvGet(db, 'buscador_last_date')).toBeFalsy();
+    release();
+    await orch.idleBuscador();
+  });
+  it('no lanza una segunda corrida mientras hay una en curso', async () => {
+    let release!: () => void;
+    runBuscador.mockImplementation(() => new Promise<void>((r) => { release = r; }));
+    await orch.tick(MON_905);
+    await orch.tick(plus(MON_905, MIN));
+    await orch.tick(plus(MON_905, 2 * MIN));
+    expect(runBuscador).toHaveBeenCalledTimes(1);
+    release();
+    await orch.idleBuscador();
+  });
+  it('al resolver, marca buscador_last_date = hoy', async () => {
+    await tickWait(MON_905);
+    expect(await repo.kvGet(db, 'buscador_last_date')).toBe('2026-11-09');
+  });
+  it('stop() aborta el signal pasado a runBuscador', async () => {
+    let signal!: AbortSignal;
+    runBuscador.mockImplementation((_now, s) => { signal = s; return new Promise<void>((r) => s.addEventListener('abort', () => r())); });
+    await orch.tick(MON_905);
+    expect(signal.aborted).toBe(false);
+    orch.stop();
+    expect(signal.aborted).toBe(true);
+    await orch.idleBuscador();
+  });
+  it('forceBuscadorToday: el mismo día vuelve a correr en el próximo tick', async () => {
+    await tickWait(MON_905);
+    await forceBuscadorToday(db);
+    await tickWait(plus(MON_905, MIN));
+    expect(runBuscador).toHaveBeenCalledTimes(2);
+  });
   it('buscador: no corre antes de la hora de búsqueda', async () => {
     await orch.tick(new Date('2026-11-09T11:30:00Z')); // 08:30 local
     expect(runBuscador).not.toHaveBeenCalled();
@@ -150,7 +194,7 @@ describe('tick', () => {
   it('un paso que lanza no frena los demás (flush corre) y se loguea', async () => {
     runBuscador.mockRejectedValue(new Error('boom'));
     const flush = vi.spyOn(gw, 'flushOutbox');
-    await orch.tick(MON_905);
+    await tickWait(MON_905);
     expect(flush).toHaveBeenCalledTimes(1);
     expect(runWeeklyAnalysis).toHaveBeenCalledTimes(1);
     const ev = (await repo.listEvents(db, 10)).find((e) => e.type === 'error');
@@ -159,14 +203,14 @@ describe('tick', () => {
 
   it('3 fallos seguidos del mismo paso -> un solo aviso; se rearma tras recuperarse', async () => {
     runBuscador.mockRejectedValue(new Error('boom'));
-    for (let i = 0; i < 4; i++) await orch.tick(plus(MON_905, i * 31 * MIN));
+    for (let i = 0; i < 4; i++) await tickWait(plus(MON_905, i * 31 * MIN));
     expect(await selfMsgs()).toEqual(['⚠️ El paso buscador falló 3 veces seguidas: boom']);
     runBuscador.mockResolvedValue({});
-    await orch.tick(plus(MON_905, 5 * 31 * MIN)); // recupera
+    await tickWait(plus(MON_905, 5 * 31 * MIN)); // recupera
     runBuscador.mockRejectedValue(new Error('otra'));
-    await orch.tick(new Date('2026-11-10T12:00:00Z'));
-    await orch.tick(new Date('2026-11-10T12:31:00Z'));
-    await orch.tick(new Date('2026-11-10T13:02:00Z'));
+    await tickWait(new Date('2026-11-10T12:00:00Z'));
+    await tickWait(new Date('2026-11-10T12:31:00Z'));
+    await tickWait(new Date('2026-11-10T13:02:00Z'));
     expect(await selfMsgs()).toHaveLength(2);
   });
 
@@ -207,17 +251,17 @@ describe('tick', () => {
 
   it('buscador que falla de forma permanente se reintenta como mucho cada 30 min', async () => {
     runBuscador.mockRejectedValue(new Error('boom'));
-    for (let i = 0; i < 10; i++) await orch.tick(plus(MON_905, i * MIN));
+    for (let i = 0; i < 10; i++) await tickWait(plus(MON_905, i * MIN));
     expect(runBuscador).toHaveBeenCalledTimes(1);
-    await orch.tick(plus(MON_905, 31 * MIN));
+    await tickWait(plus(MON_905, 31 * MIN));
     expect(runBuscador).toHaveBeenCalledTimes(2);
   });
 
   it('idle(): resuelve recién cuando termina el tick en curso, aunque otro tick se solape', async () => {
     let release!: () => void;
-    runBuscador.mockImplementation(() => new Promise<void>((r) => { release = r; }));
+    runWeeklyAnalysis.mockImplementation(() => new Promise<void>((r) => { release = r; }));
     const first = orch.tick(MON_905);
-    await vi.waitFor(() => expect(runBuscador).toHaveBeenCalled(), { timeout: 10_000 });
+    await vi.waitFor(() => expect(runWeeklyAnalysis).toHaveBeenCalled(), { timeout: 10_000 });
     await orch.tick(plus(MON_905, MIN)); // solapado
     let idle = false;
     const w = orch.idle().then(() => { idle = true; });
@@ -231,10 +275,10 @@ describe('tick', () => {
 
   it('single-flight: un tick durante otro en curso retorna de inmediato', async () => {
     let release!: () => void;
-    runBuscador.mockImplementation(() => new Promise<void>((r) => { release = r; }));
+    runWeeklyAnalysis.mockImplementation(() => new Promise<void>((r) => { release = r; }));
     const flush = vi.spyOn(gw, 'flushOutbox');
     const first = orch.tick(MON_905);
-    await vi.waitFor(() => expect(runBuscador).toHaveBeenCalled(), { timeout: 10_000 });
+    await vi.waitFor(() => expect(runWeeklyAnalysis).toHaveBeenCalled(), { timeout: 10_000 });
     await orch.tick(plus(MON_905, MIN)); // resuelve ya, sin ejecutar nada
     expect(flush).not.toHaveBeenCalled();
     release();

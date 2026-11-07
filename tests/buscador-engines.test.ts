@@ -50,6 +50,48 @@ describe('duckduckgo', () => {
   });
 });
 
+describe('bing', () => {
+  const b = ENGINES.bing;
+  const enc = (u: string) => 'a1' + Buffer.from(u).toString('base64url');
+  it('bing searchUrl', () => {
+    expect(b.searchUrl('psicóloga Rosario', 1)).toBe('https://www.bing.com/search?q=psic%C3%B3loga%20Rosario&setlang=es&cc=AR&first=1');
+    expect(b.searchUrl('x', 3)).toBe('https://www.bing.com/search?q=x&setlang=es&cc=AR&first=21');
+  });
+  it('bing parseResults decodifica /ck/a?u=a1<base64url> y descarta links de bing/microsoft', () => {
+    const s = snap('https://www.bing.com/search?q=x', [
+      `https://www.bing.com/ck/a?!&&p=abc&u=${enc('https://www.doctoralia.com.ar/psicologo/rosario')}&ntb=1`,
+      `https://www.bing.com/ck/a?!&&p=def&u=${enc('https://www.doctoralia.com.ar/psicologo/rosario')}&ntb=1`,
+      'https://www.bing.com/search?q=otra',
+      'https://go.microsoft.com/fwlink/?LinkId=521839',
+      'https://www.msn.com/es-ar',
+      'https://ana-psicologa.com/',
+    ]);
+    expect(b.parseResults(s)).toEqual(['https://www.doctoralia.com.ar/psicologo/rosario', 'https://ana-psicologa.com/']);
+  });
+  it('si el navegador trajo los resultados orgánicos, usa solo esos (ignora carruseles y noticias)', () => {
+    const s: PageSnapshot = {
+      ...snap('https://www.bing.com/search?q=x', ['https://www.tycsports.com/futbol']),
+      results: [`https://www.bing.com/ck/a?!&&p=1&u=${enc('https://psicorosario.com/')}`, 'https://directo.com/p'],
+    };
+    expect(b.parseResults(s)).toEqual(['https://psicorosario.com/', 'https://directo.com/p']);
+  });
+  it('cada motor declara el selector de sus resultados orgánicos', () => {
+    expect(ENGINES.bing.resultSelector).toBe('li.b_algo h2 a');
+    expect(ENGINES.google.resultSelector).toBe('#search a:has(h3)');
+    expect(ENGINES.duckduckgo.resultSelector).toBe('a.result__a');
+  });
+  it('bing isBlocked', () => {
+    expect(b.isBlocked(snap('https://www.bing.com/search?q=x', [], 'Resolvé el captcha para continuar'))).toBe(true);
+    expect(b.isBlocked(snap('https://www.bing.com/search?q=x', [], 'Psicólogos en Rosario: 144 profesionales'))).toBe(false);
+  });
+});
+
+describe('duckduckgo bloqueo', () => {
+  it('detecta el desafío anti-bots', () => {
+    expect(ENGINES.duckduckgo.isBlocked(snap('https://html.duckduckgo.com/html/?q=x', [], 'Unfortunately, bots use DuckDuckGo too. Please complete the following challenge'))).toBe(true);
+  });
+});
+
 describe('lista negra', () => {
   it('isBlacklisted', () => {
     expect(isBlacklisted('https://ar.linkedin.com/in/x')).toBe(true);

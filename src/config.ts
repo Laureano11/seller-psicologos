@@ -16,7 +16,7 @@ export type Config = {
     maxWaChecks: number;
     searchDelayMs: [number, number];
     pageDelayMs: [number, number];
-    engine: 'google' | 'duckduckgo';
+    engine: 'bing' | 'google' | 'duckduckgo';
     profileDir: string;
   };
   followupDays: number;
@@ -66,9 +66,9 @@ export function loadConfig(env: Env): Config {
     return [a * 1000, b * 1000];
   };
 
-  const engine = env.BUSCADOR_ENGINE?.trim() || 'google';
-  if (engine !== 'google' && engine !== 'duckduckgo') {
-    throw new Error(`BUSCADOR_ENGINE debe ser "google" o "duckduckgo" (recibido "${engine}")`);
+  const engine = env.BUSCADOR_ENGINE?.trim() || 'bing';
+  if (engine !== 'bing' && engine !== 'google' && engine !== 'duckduckgo') {
+    throw new Error(`BUSCADOR_ENGINE debe ser "bing", "google" o "duckduckgo" (recibido "${engine}")`);
   }
 
   const dncMode = (env.DNC_MODE?.trim() || 'file') as string;

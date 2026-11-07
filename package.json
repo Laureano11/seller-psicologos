@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "worker": "tsx src/worker.ts",
     "hub": "tsx src/hub/server.ts",
-    "google:auth": "tsx scripts/google-auth.ts"
+    "google:auth": "tsx scripts/google-auth.ts",
+    "buscador": "tsx src/buscador-ahora.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.97",

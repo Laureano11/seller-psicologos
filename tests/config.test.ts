@@ -64,7 +64,7 @@ describe('loadConfig: buscador', () => {
   it('buscador: defaults', () => {
     expect(loadConfig(base).buscador).toEqual({
       maxSearches: 25, maxPages: 150, resultsPerQuery: 10, maxWaChecks: 150,
-      searchDelayMs: [20000, 60000], pageDelayMs: [3000, 8000], engine: 'google', profileDir: 'browser_profile',
+      searchDelayMs: [20000, 60000], pageDelayMs: [3000, 8000], engine: 'bing', profileDir: 'browser_profile',
     });
   });
   it('buscador: rango "5-10" -> [5000, 10000]', () => {
@@ -76,7 +76,8 @@ describe('loadConfig: buscador', () => {
     expect(() => loadConfig({ ...base, BUSCADOR_PAGE_DELAY: 'abc' })).toThrow(/BUSCADOR_PAGE_DELAY/);
   });
   it('buscador: BUSCADOR_ENGINE inválido lanza', () => {
-    expect(() => loadConfig({ ...base, BUSCADOR_ENGINE: 'bing' })).toThrow(/BUSCADOR_ENGINE/);
+    expect(() => loadConfig({ ...base, BUSCADOR_ENGINE: 'yahoo' })).toThrow(/BUSCADOR_ENGINE/);
+    expect(loadConfig({ ...base, BUSCADOR_ENGINE: 'google' }).buscador.engine).toBe('google');
     expect(loadConfig({ ...base, BUSCADOR_ENGINE: 'duckduckgo' }).buscador.engine).toBe('duckduckgo');
   });
 });

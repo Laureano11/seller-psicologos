@@ -5,7 +5,7 @@ import { createFakeLlm, AllProvidersFailedError } from '../src/llm/llm.js';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createFakeBrowser, type PageSnapshot } from '../src/agents/buscador/browser.js';
+import { createFakeBrowser, HttpStatusError, type PageSnapshot } from '../src/agents/buscador/browser.js';
 import { ENGINES } from '../src/agents/buscador/engines.js';
 import { fillQuery, type Contact } from '../src/agents/buscador/extract.js';
 import { createFakeTransport } from '../src/whatsapp/transport.js';
@@ -167,6 +167,15 @@ describe('runBuscador: navegador', () => {
     expect(r.skipped.robots).toBe(1);
   });
 
+  it('pide los resultados con el selector del motor', async () => {
+    const w = mkWorld({ [gUrl(Q1)]: results(gUrl(Q1), []) }, {});
+    const seen: (string | undefined)[] = [];
+    const open = w.browser.open.bind(w.browser);
+    w.browser.open = async (u: string, o?: { resultSelector?: string }) => { seen.push(o?.resultSelector); return open(u); };
+    await runBuscador(w.deps, new Date());
+    expect(seen).toEqual(['#search a:has(h3)']);
+  });
+
   it('página sin indicio de teléfono no llama a la IA', async () => {
     const w = mkWorld({ [gUrl(Q1)]: results(gUrl(Q1), [R]), [R]: { url: R, text: 'sin datos', links: [] } }, {});
     await runBuscador(w.deps, new Date());
@@ -207,6 +216,13 @@ describe('runBuscador: navegador', () => {
     expect(r).toMatchObject({ engine: 'duckduckgo', captcha: true, inserted: 1 });
     expect(w.notes).toEqual(['⚠️ Google pidió CAPTCHA al Buscador. Sigo con DuckDuckGo por hoy.']);
     expect(await repo.getProspectByWaId(db, '5491111111111')).toMatchObject({ source: 'duckduckgo' });
+  });
+
+  it('HTTP 403 en la página de resultados cuenta como bloqueo y pasa al respaldo', async () => {
+    const w = mkWorld({ [gUrl(Q1)]: new HttpStatusError(403, gUrl(Q1)), [dUrl(Q1)]: ddgResults(dUrl(Q1), []) }, {}, { buscador: { maxSearches: 2 } });
+    const r = await runBuscador(w.deps, new Date());
+    expect(r).toMatchObject({ captcha: true, engine: 'duckduckgo' });
+    expect(w.notes).toHaveLength(1);
   });
 
   it('CAPTCHA en los dos motores -> captcha, sin lanzar', async () => {

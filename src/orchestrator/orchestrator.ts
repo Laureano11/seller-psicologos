@@ -15,7 +15,8 @@ export interface OrchestratorDeps {
   config: Config;
   gateway: Pick<WaGateway, 'handleIncoming' | 'enqueueToOwner' | 'flushOutbox'>;
   vendedor: Pick<ReturnType<typeof createVendedor>, 'handleInbound' | 'startConversation' | 'runFollowups'>;
-  runBuscador: (now: Date) => Promise<unknown>;
+  /** Corre en segundo plano; `signal` se aborta con stop() (apagado del worker). */
+  runBuscador: (now: Date, signal: AbortSignal) => Promise<unknown>;
   runWeeklyAnalysis: (now: Date) => Promise<unknown>;
 }
 
@@ -38,6 +39,8 @@ export function createOrchestrator(deps: OrchestratorDeps) {
   let inFlight: Promise<void> = Promise.resolve();
   let waDownSince: Date | null = null;
   let waDownLogged = false;
+  let buscadorRun: Promise<void> | null = null;
+  let buscadorAbort: AbortController | null = null;
 
   const local = (now: Date) => DateTime.fromJSDate(now, { zone: config.tz });
 
@@ -95,29 +98,70 @@ export function createOrchestrator(deps: OrchestratorDeps) {
     for (const id of ids) if (!dueAt.has(id) && !pending.includes(id)) dueAt.set(id, now);
   }
 
-  async function step(paso: string, fn: () => Promise<void>, opts: { now?: Date; backoff?: boolean } = {}): Promise<void> {
+  function recordSuccess(paso: string): void {
+    failStreak.delete(paso);
+    lastFailure.delete(paso);
+    alerted.delete(paso);
+  }
+
+  async function recordFailure(paso: string, e: unknown, now?: Date): Promise<void> {
+    const mensaje = errMsg(e);
+    if (now) lastFailure.set(paso, now);
+    const n = (failStreak.get(paso) ?? 0) + 1;
+    failStreak.set(paso, n);
+    try {
+      await logEvent(db, 'error', { paso, mensaje });
+      if (n >= FAIL_STREAK_ALERT && !alerted.has(paso)) {
+        alerted.add(paso);
+        await gateway.enqueueToOwner(`⚠️ El paso ${paso} falló 3 veces seguidas: ${mensaje}`);
+      }
+    } catch { /* no hay más que hacer */ }
+  }
+
+  /** `deferred`: el éxito/fracaso real se registra después (tarea en segundo plano), no al volver de fn. */
+  async function step(
+    paso: string,
+    fn: () => Promise<void>,
+    opts: { now?: Date; backoff?: boolean; deferred?: boolean } = {},
+  ): Promise<void> {
     if (opts.backoff && opts.now) {
       const failedAt = lastFailure.get(paso);
       if (failedAt && opts.now.getTime() - failedAt.getTime() < RETRY_FAILED_MS) return;
     }
     try {
       await fn();
-      failStreak.delete(paso);
-      lastFailure.delete(paso);
-      alerted.delete(paso);
+      if (!opts.deferred) recordSuccess(paso);
     } catch (e) {
-      const mensaje = errMsg(e);
-      if (opts.now) lastFailure.set(paso, opts.now);
-      const n = (failStreak.get(paso) ?? 0) + 1;
-      failStreak.set(paso, n);
-      try {
-        await logEvent(db, 'error', { paso, mensaje });
-        if (n >= FAIL_STREAK_ALERT && !alerted.has(paso)) {
-          alerted.add(paso);
-          await gateway.enqueueToOwner(`⚠️ El paso ${paso} falló 3 veces seguidas: ${mensaje}`);
-        }
-      } catch { /* no hay más que hacer */ }
+      await recordFailure(paso, e, opts.now);
     }
+  }
+
+  /** Lanza la corrida del Buscador sin esperarla (puede durar más de una hora). */
+  function startBuscador(now: Date, today: string): void {
+    const ac = new AbortController();
+    buscadorAbort = ac;
+    buscadorRun = (async () => {
+      try {
+        await deps.runBuscador(now, ac.signal);
+        await kvSet(db, 'buscador_last_date', today);
+        recordSuccess('buscador');
+      } catch (e) {
+        await recordFailure('buscador', e, now);
+      } finally {
+        buscadorRun = null;
+        buscadorAbort = null;
+      }
+    })();
+  }
+
+  /** Aborta la corrida del Buscador en curso (apagado). */
+  function stop(): void {
+    buscadorAbort?.abort();
+  }
+
+  /** Resuelve cuando termina la corrida del Buscador en curso (si hay). */
+  async function idleBuscador(): Promise<void> {
+    await buscadorRun;
   }
 
   function tick(now: Date): Promise<void> {
@@ -141,10 +185,10 @@ export function createOrchestrator(deps: OrchestratorDeps) {
       await step('responder', () => runDue(now));
 
       await step('buscador', async () => {
+        if (buscadorRun) return;
         if (dt.hour < config.searchHour || (await kvGet<string>(db, 'buscador_last_date')) === today) return;
-        await deps.runBuscador(now);
-        await kvSet(db, 'buscador_last_date', today);
-      }, { now, backoff: true });
+        startBuscador(now, today);
+      }, { now, backoff: true, deferred: true });
 
       // El freno se evalúa antes de iniciar contactos para que el mismo tick ya respete la pausa.
       await step('freno', async () => {
@@ -223,7 +267,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
     }
   }
 
-  return { onIncoming, runDue, tick, idle, onWaStatus };
+  return { onIncoming, runDue, tick, idle, onWaStatus, stop, idleBuscador };
 }
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));

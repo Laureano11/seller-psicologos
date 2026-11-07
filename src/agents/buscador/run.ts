@@ -7,7 +7,7 @@ import { toWaId } from '../../phone.js';
 import { getProspectByWaId, insertProspect, isOptedOut, kvGet, kvSet, logEvent } from '../../db/repo.js';
 import { CITIES } from './cities.js';
 import type { ProspectSource } from './sources.js';
-import type { Browser } from './browser.js';
+import { HttpStatusError, type Browser } from './browser.js';
 import { isBlacklisted, type EngineName, type SearchEngine } from './engines.js';
 import { extractContacts, fillQuery, hasPhoneHint, loadInstructions, loadQueries, looksLikeTeam } from './extract.js';
 
@@ -50,7 +50,7 @@ export type BuscadorDeps = {
 
 /** Páginas de resultados que se recorren por consulta antes de reiniciar el ciclo. */
 const MAX_RESULT_PAGES = 3;
-const ENGINE_LABEL: Record<EngineName, string> = { google: 'Google', duckduckgo: 'DuckDuckGo' };
+const ENGINE_LABEL: Record<EngineName, string> = { bing: 'Bing', google: 'Google', duckduckgo: 'DuckDuckGo' };
 
 class Stop {
   constructor(public reason: StopReason) {}
@@ -177,13 +177,18 @@ export async function runBuscador(deps: BuscadorDeps, now: Date, signal?: AbortS
       if (result.searches >= lim.maxSearches) throw new Stop('tope_busquedas');
       result.searches++;
       let serp;
+      let blocked = false;
       try {
-        serp = await browser.open(engine.searchUrl(query, cursor.page));
-      } catch {
-        skip('busqueda_error');
-        return;
+        serp = await browser.open(engine.searchUrl(query, cursor.page), { resultSelector: engine.resultSelector });
+        blocked = engine.isBlocked(serp);
+      } catch (e) {
+        if (!(e instanceof HttpStatusError && (e.status === 403 || e.status === 429))) {
+          skip('busqueda_error');
+          return;
+        }
+        blocked = true;
       }
-      if (engine.isBlocked(serp)) {
+      if (blocked || !serp) {
         result.captcha = true;
         engineIdx++;
         const next = deps.engines[engineIdx];
@@ -249,4 +254,9 @@ export async function runBuscador(deps: BuscadorDeps, now: Date, signal?: AbortS
   await kvSet(db, 'buscador_cursor', cursor); // un corte a mitad de consulta la repite en la próxima corrida
   await finish();
   return result;
+}
+
+/** Borra la marca de "ya corrió hoy": el Orquestador lanza el Buscador en el próximo tick (si ya es SEARCH_HOUR). */
+export async function forceBuscadorToday(db: Db): Promise<void> {
+  await db.query("DELETE FROM kv WHERE key = 'buscador_last_date'");
 }

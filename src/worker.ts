@@ -8,7 +8,7 @@ import { createDncChecker, reportDncStatus } from './dnc.js';
 import { createGooglePlacesSource, type ProspectSource } from './agents/buscador/sources.js';
 import { runBuscador } from './agents/buscador/run.js';
 import { launchBrowser } from './agents/buscador/browser.js';
-import { ENGINES } from './agents/buscador/engines.js';
+import { engineOrder } from './agents/buscador/engines.js';
 import { createRobotsChecker } from './agents/buscador/robots.js';
 import { createGoogleServices } from './agents/agenda/google.js';
 import { createVendedor } from './agents/vendedor/vendedor.js';
@@ -31,18 +31,17 @@ async function main() {
   const google = config.google ? createGoogleServices(config.google) : undefined;
   const vendedor = createVendedor({ db, llm, gateway, calendar: google?.calendar, mail: google?.mail, config });
 
-  const primary = config.buscador.engine;
   const buscadorDeps = {
     db, llm, dnc, sources, wa: transport, config, contentDir: config.contentDir,
     openBrowser: () => launchBrowser({ profileDir: config.buscador.profileDir, tz: config.tz }),
-    engines: [ENGINES[primary], ENGINES[primary === 'google' ? 'duckduckgo' : 'google']],
+    engines: engineOrder(config.buscador.engine),
     robots: createRobotsChecker(),
     notifyOwner: (t: string) => gateway.enqueueToOwner(t),
   };
 
   const orch = createOrchestrator({
     db, config, gateway, vendedor,
-    runBuscador: (now) => runBuscador(buscadorDeps, now),
+    runBuscador: (now, signal) => runBuscador(buscadorDeps, now, signal),
     runWeeklyAnalysis: (now) => runWeeklyAnalysis({ db, llm, config }, now),
   });
 
@@ -63,6 +62,7 @@ async function main() {
     if (closing) return;
     closing = true;
     clearInterval(timer);
+    orch.stop();
     await orch.idle();
     await transport.stop?.().catch(() => {});
     await db.close().catch(() => {});
