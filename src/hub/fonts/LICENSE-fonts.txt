@@ -1,0 +1,6 @@
+Sora, Inter y JetBrains Mono (subconjunto latino, variables) se distribuyen bajo la
+SIL Open Font License 1.1: https://openfontlicense.org
+- Sora — Copyright 2019 The Sora Project Authors
+- Inter — Copyright 2020 The Inter Project Authors
+- JetBrains Mono — Copyright 2020 The JetBrains Mono Project Authors
+Archivos obtenidos de los paquetes @fontsource-variable (v5.2.5).

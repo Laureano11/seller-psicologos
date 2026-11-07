@@ -1,4 +1,5 @@
 import type { Child } from 'hono/jsx';
+import { raw } from 'hono/html';
 import type { Escalation, EventRow, ManualVersion, Meeting, Message, Prospect, Proposal, Status } from '../db/repo.js';
 import type { VariantStat } from '../learning/stats.js';
 
@@ -15,170 +16,339 @@ export const STATUS_LABELS: Record<Status, string> = {
   descartado: 'Descartado',
 };
 
+// Estado = borde + tinte + punto. Nunca rojo/verde/amarillo: signal (azul) vs bone (blanco) vs muted, sólido vs hueco
+export type Tone = 'live' | 'positive' | 'attention' | 'neutral' | 'quiet' | 'void';
+const STATUS_TONE: Record<Status, Tone> = {
+  encontrado: 'quiet', contactado: 'neutral', conversando: 'neutral', interesado: 'attention',
+  reunion_agendada: 'positive', listo_para_cerrar: 'live', rechazado: 'void', sin_respuesta: 'quiet', baja: 'void', descartado: 'void',
+};
+
 const CSS = `
-@font-face{font-family:Geist;src:url(/fonts/Geist-Regular.woff2) format('woff2');font-weight:400;font-display:swap}
-@font-face{font-family:Geist;src:url(/fonts/Geist-Medium.woff2) format('woff2');font-weight:500;font-display:swap}
-@font-face{font-family:'Geist Mono';src:url(/fonts/GeistMono-Regular.woff2) format('woff2');font-weight:400;font-display:swap}
+@font-face{font-family:Inter;src:url(/fonts/Inter-Variable.woff2) format('woff2');font-weight:100 900;font-display:swap}
+@font-face{font-family:Sora;src:url(/fonts/Sora-Variable.woff2) format('woff2');font-weight:100 800;font-display:swap}
+@font-face{font-family:'JetBrains Mono';src:url(/fonts/JetBrainsMono-Variable.woff2) format('woff2');font-weight:100 800;font-display:swap}
 @view-transition{navigation:auto}
 :root{
-  --canvas:#101010;--lift:#1d1a18;--btn:#1f1d1c;--stroke:#3d3a39;--graphite:#4d4947;
-  --granite:#8a8380;--stone:#b8b3b0;--bone:#eeeeee;--chalk:#fafafa;--ink:#101010;
-  --orange:#ee6018;--green:#a0ca92;
-  --sans:Geist,Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
-  --mono:'Geist Mono','JetBrains Mono','IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
-  --r-sm:3px;--r-card:10px;--r-panel:20px;--ease:cubic-bezier(.4,0,.2,1);
   color-scheme:dark;
+  --bg:oklch(.145 .012 262);--fg:oklch(.965 .004 262);--surface:oklch(.172 .012 262);--popover:oklch(.19 .013 262);
+  --muted:oklch(.69 .012 262);--border:oklch(1 0 0/8%);--input:oklch(1 0 0/12%);
+  --signal:oklch(.72 .15 250);--chart2:oklch(.5 .014 262);
+  --sidebar:oklch(.13 .012 262);--sidebar-accent:oklch(.2 .012 262);--sidebar-border:oklch(1 0 0/7%);
+  --sans:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --heading:Sora,var(--sans);
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --r-md:10px;--r-lg:12px;--r-xl:17px;--r-2xl:22px;
+  --ease:cubic-bezier(.32,.72,0,1);
+  --shadow-bone:0 1px 0 0 oklch(1 0 0/60%) inset,0 10px 28px -14px oklch(.965 .004 262/45%);
+  --shadow-lift:0 1px 0 0 oklch(1 0 0/5%) inset,0 24px 48px -24px oklch(0 0 0/85%);
 }
-*{box-sizing:border-box}
-html{background:var(--canvas)}
-body{margin:0;background:var(--canvas);color:var(--bone);font:400 16px/1.5 var(--sans);-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
-a{color:var(--bone);text-decoration:underline;text-decoration-color:var(--stroke);text-underline-offset:3px;transition:color .15s var(--ease),text-decoration-color .15s var(--ease)}
-a:hover{color:var(--chalk);text-decoration-color:var(--chalk)}
-:focus-visible{outline:1px solid var(--orange);outline-offset:3px}
-h1,h2,h3{font-weight:400;margin:0 0 16px}
-h2{font-size:36px;line-height:1.1;letter-spacing:-1.12px}
-h3{font-size:16px;line-height:1.5;letter-spacing:-.02em;margin-bottom:12px}
-h4,th,.label{font:400 12px/1 var(--mono);letter-spacing:-.24px;text-transform:uppercase;color:var(--stone)}
-h4{margin:24px 0 8px}
-small{color:var(--granite);font-size:14px}
-.mono{font-family:var(--mono);font-size:13px}
+*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:oklch(1 0 0/14%) transparent}
+html{background:var(--bg)}
+body{margin:0;background:var(--bg);color:var(--fg);font:400 13px/1.5 var(--sans);-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+::selection{background:oklch(.72 .15 250/35%);color:var(--fg)}
+a{color:var(--fg);text-decoration:underline;text-decoration-color:oklch(1 0 0/20%);text-underline-offset:3px;transition:text-decoration-color .2s var(--ease)}
+a:hover{text-decoration-color:var(--fg)}
+:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+h1,h2,h3{font-family:var(--heading);font-weight:600;letter-spacing:-.02em;margin:0}
+h2{font-size:15px;line-height:1.3;margin-bottom:16px}
+h3{font-size:15px;line-height:1.3;margin-bottom:12px}
+h4,th,.label{font:500 10px/1.2 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+h4{margin:20px 0 8px}
+small{color:var(--muted);font-size:12px}
+p{margin:0 0 12px}
+.mono{font-family:var(--mono);font-size:11px}
 
-/* Barra superior */
-.top{position:sticky;top:0;z-index:5;background:rgb(16 16 16/.96);border-bottom:1px solid var(--lift);view-transition-name:top}
-.top-in{max-width:1200px;margin:0 auto;height:64px;padding:0 24px;display:flex;align-items:center;gap:32px}
-.mark{font:400 12px/1 var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--bone);text-decoration:none;display:flex;align-items:center;gap:10px}
-.nav{display:flex;gap:4px;flex:1}
-.nav a{font-size:14px;text-transform:uppercase;text-decoration:none;color:var(--granite);padding:8px 12px;border-radius:var(--r-sm);transition:color .15s var(--ease),background-color .15s var(--ease)}
-.nav a:hover{color:var(--bone)}
-.nav a.on{color:var(--bone);background:var(--lift)}
-.wa{font:400 12px/1 var(--mono);text-transform:uppercase;color:var(--granite);display:flex;align-items:center;gap:8px}
-.pulse{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--graphite);flex:none}
-.pulse.live{background:var(--orange)}
-.pulse.ok{background:var(--green)}
-.need{font-size:14px;text-decoration:none;padding:8px 14px;border-radius:var(--r-sm);background:var(--lift);color:var(--granite);display:flex;align-items:center;gap:8px;transition:background-color .15s var(--ease),color .15s var(--ease)}
-.need.on{background:var(--chalk);color:var(--ink)}
-.need.on:hover{color:var(--ink);background:var(--bone)}
+/* Marco: sidebar + topbar */
+.sidebar{position:fixed;inset:0 auto 0 0;z-index:30;width:248px;background:var(--sidebar);border-right:1px solid var(--sidebar-border);display:flex;flex-direction:column}
+.brand{display:flex;align-items:center;gap:12px;padding:20px 20px 24px;text-decoration:none;color:var(--fg)}
+.brand svg{width:32px;height:32px;flex:none}
+.brand b{display:block;font:600 15px/1.2 var(--heading);letter-spacing:-.02em}
+.brand > span > span{display:block;font:400 10px/1.4 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+.nav{padding:0 12px}
+.nav p{padding:0 12px 8px;margin:0;font:400 10px/1 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+.nav ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.nav a{position:relative;display:flex;align-items:center;gap:12px;height:36px;padding:0 12px;border:1px solid transparent;border-radius:var(--r-lg);font-size:13px;font-weight:500;text-decoration:none;color:var(--muted);transition:color .2s var(--ease),background-color .2s var(--ease)}
+.nav a:hover{color:var(--fg);background:oklch(1 0 0/.03)}
+.nav a svg{width:16px;height:16px;flex:none}
+.nav a.on{color:var(--fg);background:var(--sidebar-accent);border-color:oklch(1 0 0/.07);box-shadow:0 1px 0 0 oklch(1 0 0/5%) inset}
+.nav a.on::before{content:'';position:absolute;left:-1px;top:50%;width:2px;height:16px;transform:translateY(-50%);border-radius:2px;background:var(--signal);box-shadow:0 0 12px var(--signal)}
+.badge{margin-left:auto;min-width:20px;height:20px;padding:0 6px;display:inline-flex;align-items:center;justify-content:center;border:1px solid oklch(.72 .15 250/35%);background:oklch(.72 .15 250/10%);border-radius:6px;font:400 10px/1 var(--mono);color:var(--fg)}
+.side-foot{margin-top:auto;padding:12px}
+.status-card{display:block;border:1px solid var(--sidebar-border);background:oklch(1 0 0/.02);border-radius:var(--r-xl);padding:16px;text-decoration:none;color:var(--fg);transition:border-color .2s var(--ease)}
+.status-card:hover{border-color:oklch(1 0 0/15%)}
+.status-card .row{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px;font-weight:500}
+.status-card .row span:first-child{display:flex;align-items:center;gap:8px}
+.status-card .row .mono{color:var(--muted);font-weight:400}
+.meter{display:flex;gap:4px;margin-top:12px}
+.meter i{height:4px;flex:1;border-radius:9px;background:oklch(1 0 0/12%)}
+.meter i.on{background:var(--signal)}
+.status-card small{display:block;margin-top:12px}
 
-/* Lienzo */
-main{max-width:1200px;margin:0 auto;padding:40px 24px 96px;view-transition-name:main}
-::view-transition-old(main),::view-transition-new(main){animation-duration:.2s;animation-timing-function:var(--ease)}
-.notices{list-style:none;margin:0 0 40px;padding:0;border-top:1px solid var(--lift)}
-.banner{display:flex;gap:12px;align-items:baseline;padding:12px 0;border-bottom:1px solid var(--lift);font-size:14px;color:var(--granite)}
-.banner::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--orange);flex:none;transform:translateY(-1px)}
-.banner.error{color:var(--bone);margin:0 0 16px;border-top:1px solid var(--lift)}
+.page-wrap{padding-left:248px;min-height:100vh;display:flex;flex-direction:column}
+.top{position:sticky;top:0;z-index:20;height:56px;display:flex;align-items:center;gap:12px;padding:0 40px;border-bottom:1px solid var(--border);background:oklch(.145 .012 262/70%);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);view-transition-name:top}
+.crumb{display:flex;align-items:center;gap:8px;font:400 11px/1 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+.crumb i{font-style:normal;color:oklch(1 0 0/20%)}
+.crumb b{font-weight:400;color:oklch(.965 .004 262/85%)}
+.top-actions{margin-left:auto;display:flex;align-items:center;gap:8px}
+.chip{height:32px;display:inline-flex;align-items:center;gap:8px;padding:0 12px;border:1px solid var(--border);background:oklch(1 0 0/.02);border-radius:var(--r-lg);font:400 11px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.btn,button{font:500 13px/1 var(--sans);height:32px;padding:0 14px;display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:var(--r-lg);background:oklch(1 0 0/.03);color:var(--fg);text-decoration:none;cursor:pointer;transition:background-color .2s var(--ease),border-color .2s var(--ease),transform .15s var(--ease)}
+.btn:hover,button:hover{background:oklch(1 0 0/.06);border-color:oklch(1 0 0/18%)}
+.btn:active,button:active{transform:scale(.97)}
+.btn.primary,button{background:var(--fg);color:var(--bg);border-color:transparent;box-shadow:var(--shadow-bone)}
+.btn.primary:hover,button:hover{background:oklch(.9 .004 262);border-color:transparent}
+button.no{background:transparent;color:var(--fg);border-color:var(--input);box-shadow:none}
+button.no:hover{background:oklch(1 0 0/.04);border-color:oklch(1 0 0/20%)}
 
-.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));border:1px solid var(--lift);border-radius:var(--r-card);margin:0 0 56px;overflow:hidden}
-.metric{padding:20px;border-left:1px solid var(--lift);display:flex;flex-direction:column-reverse;gap:12px}
-.metric:first-child{border-left:0}
-.metric b{font:400 36px/1.1 var(--sans);letter-spacing:-1.12px;color:var(--bone)}
-.metric span{font:400 12px/1 var(--mono);letter-spacing:-.24px;text-transform:uppercase;color:var(--stone)}
-.metric.good b{color:var(--green)}
-.metric.hot b{color:var(--orange)}
+/* Lienzo con grilla y resplandor */
+main{position:relative;flex:1;view-transition-name:main}
+main::before,main::after{content:'';position:absolute;inset:0 0 auto;height:460px;pointer-events:none}
+main::before{background-image:linear-gradient(to right,oklch(1 0 0/3.5%) 1px,transparent 1px),linear-gradient(to bottom,oklch(1 0 0/3.5%) 1px,transparent 1px);background-size:56px 56px;-webkit-mask-image:linear-gradient(to bottom,#000,#000 40%,transparent);mask-image:linear-gradient(to bottom,#000,#000 40%,transparent);opacity:.6}
+main::after{background:radial-gradient(55% 60% at 50% 0%,oklch(.72 .15 250/.09),transparent 70%)}
+.content{position:relative;z-index:1;max-width:1400px;margin:0 auto;padding:36px 40px 80px;animation:entra .5s var(--ease) both}
+@keyframes entra{from{opacity:0;transform:translateY(8px)}}
+::view-transition-old(main),::view-transition-new(main){animation-duration:.2s}
 
-.cols{display:grid;grid-template-columns:320px 1fr;gap:24px;align-items:start}
-.list{border:1px solid var(--lift);border-radius:var(--r-card);overflow:hidden;position:sticky;top:88px;max-height:calc(100vh - 112px);overflow-y:auto}
-.item{display:block;padding:16px 20px;border-bottom:1px solid var(--lift);text-decoration:none;color:var(--bone);transition:background-color .15s var(--ease)}
-.item:last-child{border-bottom:0}
-.item:hover{background:var(--lift);color:var(--bone)}
-.item.sel{background:var(--bone);color:var(--ink)}
-.item.sel small{color:var(--graphite)}
-.item strong{font-weight:400;letter-spacing:-.01em}
-.item small{display:block;font:400 12px/1.4 var(--mono);text-transform:uppercase;letter-spacing:-.24px;margin-top:4px}
-.pin{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--orange);margin-right:10px;vertical-align:middle}
+.ph{padding-bottom:32px}
+.eyebrow{display:flex;align-items:center;gap:8px;margin:0 0 12px;font:400 11px/1 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+.eyebrow::before{content:'';width:6px;height:6px;border-radius:2px;background:var(--signal);box-shadow:0 0 10px var(--signal)}
+.ph h1{font-size:34px;line-height:1.1;text-wrap:balance}
+.ph p{margin:10px 0 0;max-width:42rem;font-size:15px;line-height:1.65;color:var(--muted)}
 
-/* La tarjeta clara: el trabajo sobre la mesa */
-.detail{background:var(--bone);color:var(--ink);border-radius:var(--r-panel);padding:8px 32px;min-width:0;animation:aterriza .2s var(--ease) both}
-@keyframes aterriza{from{opacity:0;transform:translateY(4px)}}
-.detail .card{padding:24px 0;border:0;border-bottom:1px solid #d6d3d1;border-radius:0;margin:0}
-.detail .card:last-child{border-bottom:0}
-.detail h2{color:var(--ink)}
-.detail h3{color:var(--ink)}
-.detail small{color:var(--graphite)}
-.detail a{color:var(--ink);text-decoration-color:var(--stone)}
-.detail pre{background:#e2e0de;color:var(--ink)}
-.detail .card.ask{border-left:2px solid var(--orange);padding-left:20px}
-.card{border:1px solid var(--lift);border-radius:var(--r-card);padding:24px;margin-bottom:24px}
-.card .card{background:var(--bone);color:var(--ink);border:0}
-.card .card pre{background:#e2e0de;color:var(--ink)}
-.tag{display:inline-block;font:400 12px/1 var(--mono);text-transform:uppercase;padding:4px 6px;border:1px solid var(--stroke);border-radius:var(--r-sm);margin-left:6px}
+/* Tarjeta de atención: la única superficie teñida de azul */
+.attn{border:1px solid oklch(.72 .15 250/25%);background:oklch(.72 .15 250/.035);border-radius:var(--r-2xl);margin:0 0 24px;overflow:hidden}
+.attn-h{display:flex;align-items:center;gap:10px;padding:14px 20px;font-size:13px;font-weight:500;border-bottom:1px solid oklch(.72 .15 250/15%)}
+.attn-h .mono{margin-left:auto;color:var(--muted);font-weight:400}
+.notices{list-style:none;margin:0;padding:0}
+.banner{display:flex;align-items:center;gap:14px;padding:12px 20px;border-top:1px solid oklch(.72 .15 250/10%);font-size:13px;color:oklch(.965 .004 262/90%)}
+.banner:first-child{border-top:0}
+.banner::before{content:'AVISO';flex:none;width:72px;height:22px;display:inline-flex;align-items:center;justify-content:center;border:1px solid oklch(.72 .15 250/40%);border-radius:6px;font:500 10px/1 var(--mono);letter-spacing:.14em;color:var(--fg)}
+.banner.error{margin:0 0 24px;border:1px solid oklch(1 0 0/25%);background:oklch(1 0 0/.04);border-radius:var(--r-xl)}
+.banner.error::before{content:'ERROR';border-color:oklch(1 0 0/30%)}
 
-.chat{display:flex;flex-direction:column;gap:12px}
-.bubble{max-width:78%;padding:12px 16px;border-radius:var(--r-card);white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px;line-height:1.5}
-.bubble small{display:block;font:400 12px/1 var(--mono);text-transform:uppercase;letter-spacing:-.24px;margin-bottom:8px}
-.bubble.prospect{background:var(--chalk);border:1px solid #d6d3d1;align-self:flex-start}
-.bubble.prospect small{color:var(--granite)}
-.bubble.agent{background:var(--ink);color:var(--bone);align-self:flex-end}
-.bubble.agent small{color:var(--granite)}
-.bubble.lauri{background:var(--lift);color:var(--bone);align-self:flex-end;border:1px solid var(--orange)}
-.bubble.lauri small{color:var(--orange)}
+/* Puntos y pills */
+.dot{position:relative;display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--muted);flex:none}
+.dot.signal{background:var(--signal)}
+.dot.bone{background:var(--fg)}
+.dot.hollow{background:transparent;box-shadow:inset 0 0 0 1.5px currentColor}
+.dot.bone.hollow{color:var(--fg)}.dot.muted.hollow{color:var(--muted)}
+.dot.pulse::after{content:'';position:absolute;inset:0;border-radius:50%;background:var(--signal);animation:ring 2.4s cubic-bezier(.2,.6,.3,1) infinite}
+@keyframes ring{0%{transform:scale(1);opacity:.6}80%,100%{transform:scale(2.8);opacity:0}}
+.pill{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border:1px solid var(--border);border-radius:999px;font-size:11px;font-weight:500;white-space:nowrap;flex:none;color:oklch(.965 .004 262/80%);background:oklch(1 0 0/.03)}
+.pill.live,.pill.positive{border-color:oklch(.72 .15 250/30%);background:oklch(.72 .15 250/8%);color:var(--fg)}
+.pill.attention{border-color:oklch(1 0 0/25%);background:oklch(1 0 0/.04);color:var(--fg)}
+.pill.quiet,.pill.void{background:transparent;color:var(--muted)}
+.pill.void{text-decoration:line-through;text-decoration-color:oklch(.69 .012 262/50%)}
 
-textarea{width:100%;min-height:104px;font:inherit;color:var(--ink);background:var(--chalk);border:1px solid #d6d3d1;border-radius:var(--r-sm);padding:12px 14px;resize:vertical;margin-bottom:12px;transition:border-color .15s var(--ease)}
-textarea:focus{outline:0;border-color:var(--ink)}
-button{font:400 14px/1 var(--sans);height:36px;padding:0 14px;border:1px solid transparent;border-radius:var(--r-sm);background:var(--btn);color:var(--bone);cursor:pointer;transition:background-color .15s var(--ease),color .15s var(--ease),border-color .15s var(--ease)}
-button:hover{background:var(--graphite)}
-button:active{background:var(--stroke)}
-.detail button,.card .card button{background:var(--ink);color:var(--bone)}
-.detail button:hover,.card .card button:hover{background:var(--graphite)}
-button.no,.card .card button.no{background:transparent;color:inherit;border-color:var(--stroke)}
-button.no:hover,.card .card button.no:hover{border-color:currentColor;background:transparent}
+/* KPIs */
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px;margin:0 0 24px}
+.metric{position:relative;overflow:hidden;padding:20px;display:flex;flex-direction:column-reverse;justify-content:flex-end;gap:20px;background:var(--surface) linear-gradient(180deg,oklch(1 0 0/2.5%),transparent 120px);border:1px solid var(--border);border-radius:var(--r-xl);transition:border-color .3s var(--ease),translate .3s var(--ease)}
+.metric::before{content:'';position:absolute;left:24px;right:24px;top:0;height:1px;background:linear-gradient(to right,transparent,oklch(1 0 0/20%),transparent);opacity:0;transition:opacity .5s}
+.metric:hover{translate:0 -2px;border-color:oklch(1 0 0/15%)}
+.metric:hover::before{opacity:1}
+.metric b{font:600 34px/1 var(--sans);letter-spacing:-.02em;color:var(--fg)}
+.metric span{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+.metric.good span::after,.metric.hot span::after{content:'';margin-left:auto;width:6px;height:6px;border-radius:50%;background:var(--signal);box-shadow:0 0 8px var(--signal)}
+.metric.hot{border-color:oklch(.72 .15 250/30%);background-color:oklch(.72 .15 250/.035)}
 
-table{border-collapse:collapse;width:100%;font-size:14px;line-height:1.43}
-th,td{text-align:left;padding:12px 12px 12px 0;border-bottom:1px solid var(--lift);vertical-align:top}
-tbody tr{transition:background-color .15s var(--ease)}
-tbody tr:hover{background:var(--lift)}
-pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--lift);padding:12px 14px;border-radius:var(--r-sm);margin:8px 0;font:400 13px/1.5 var(--mono)}
-details{border-top:1px solid var(--lift)}
-details summary{cursor:pointer;padding:12px 0;font-size:14px;color:var(--stone)}
-img{border-radius:var(--r-card);background:var(--chalk);padding:12px}
-hr{border:0;border-top:1px solid var(--lift);margin:16px 0}
+/* Paneles */
+.cols{display:grid;grid-template-columns:minmax(0,360px) minmax(0,1fr);gap:20px;align-items:start}
+.card,.list,.detail{background:var(--surface) linear-gradient(180deg,oklch(1 0 0/2.5%),transparent 120px);border:1px solid var(--border);border-radius:var(--r-xl)}
+.card{padding:20px 24px;margin-bottom:20px}
+.card .card{background:oklch(1 0 0/.02);padding:16px 18px;margin:12px 0 0;border-radius:var(--r-lg)}
+.list{padding:8px;position:sticky;top:76px;max-height:calc(100vh - 96px);overflow-y:auto}
+.list-h{display:flex;align-items:center;justify-content:space-between;padding:10px 12px 12px;font:400 10px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.item{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid transparent;border-radius:var(--r-lg);text-decoration:none;color:var(--fg);transition:background-color .2s var(--ease),border-color .2s var(--ease)}
+.item:hover{background:oklch(1 0 0/.03);border-color:var(--border)}
+.item.sel{background:oklch(1 0 0/.09);border-color:oklch(1 0 0/.07)}
+.avatar{position:relative;width:36px;height:36px;flex:none;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--border);background:oklch(1 0 0/.03);border-radius:var(--r-lg);font:600 14px/1 var(--heading)}
+.avatar .dot{position:absolute;right:-3px;bottom:-3px;width:10px;height:10px;border:2px solid var(--surface);box-sizing:content-box}
+.item-t{min-width:0;flex:1}
+.item strong{display:block;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item small{display:block;font:400 11px/1.4 var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.empty{padding:40px 16px;text-align:center;color:var(--muted)}
 
-@media(max-width:860px){
-  .top-in{height:auto;flex-wrap:wrap;gap:12px 20px;padding:14px 16px}
-  .nav{order:3;flex-basis:100%;overflow-x:auto}
-  main{padding:24px 16px 64px}
-  h2{font-size:28px;letter-spacing:-.8px}
+.detail{padding:4px 24px;min-width:0}
+.detail > .card{background:none;border:0;border-radius:0;border-bottom:1px solid var(--border);padding:20px 0;margin:0}
+.detail > .card:last-child{border-bottom:0}
+.detail .ask{border:1px solid oklch(.72 .15 250/25%)!important;background:oklch(.72 .15 250/.035)!important;border-radius:var(--r-2xl)!important;padding:20px!important;margin:16px 0!important}
+.ask h3{display:flex;align-items:center;gap:10px}
+.ask h3::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--signal);box-shadow:0 0 8px var(--signal)}
+.d-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.d-head h2{font-size:22px;line-height:1.15;margin:0 0 8px}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1px;margin-top:16px;border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;background:var(--border)}
+.facts div{background:var(--popover);padding:10px 14px;min-width:0}
+.facts dt{font:400 10px/1.2 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+.facts dd{margin:0;font-size:13px;overflow-wrap:anywhere}
+.need-line{display:flex;align-items:center;gap:10px;margin-top:14px;font-size:13px}
+.tag{display:inline-block;font:500 10px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;padding:5px 7px;border:1px solid var(--border);border-radius:6px;margin-left:6px;color:var(--muted)}
+
+.chat{display:flex;flex-direction:column;gap:10px}
+.bubble{max-width:78%;padding:10px 14px;border:1px solid var(--border);border-radius:var(--r-lg);white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.6}
+.bubble small{display:block;font:400 10px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;margin-bottom:8px}
+.bubble.prospect{background:oklch(1 0 0/.04);align-self:flex-start}
+.bubble.agent{background:oklch(1 0 0/.015);align-self:flex-end;color:oklch(.965 .004 262/90%)}
+.bubble.lauri{background:oklch(.72 .15 250/.06);border-color:oklch(.72 .15 250/35%);align-self:flex-end}
+.bubble.lauri small{color:var(--signal)}
+
+textarea{width:100%;min-height:104px;font:inherit;font-size:13px;color:var(--fg);background:oklch(1 0 0/.02);border:1px solid var(--input);border-radius:var(--r-lg);padding:10px 12px;resize:vertical;margin-bottom:12px;transition:border-color .2s var(--ease),box-shadow .2s var(--ease)}
+textarea::placeholder{color:var(--muted)}
+textarea:focus{outline:0;border-color:oklch(.72 .15 250/60%);box-shadow:0 0 0 3px oklch(.72 .15 250/20%)}
+
+table{border-collapse:collapse;width:100%;font-size:13px;line-height:1.45}
+th{padding:10px 12px 10px 0;border-bottom:1px solid var(--border);text-align:left;font-weight:500}
+td{text-align:left;padding:12px 12px 12px 0;border-bottom:1px solid var(--border);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+tbody tr{transition:background-color .2s var(--ease)}
+tbody tr:hover{background:oklch(1 0 0/.035)}
+td.t{font:400 11px/1.6 var(--mono);color:var(--muted);white-space:nowrap}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:oklch(1 0 0/.025);border:1px solid var(--border);padding:10px 12px;border-radius:var(--r-md);margin:8px 0;font:400 12px/1.6 var(--mono);color:oklch(.965 .004 262/90%)}
+details{border-top:1px solid var(--border)}
+details summary{cursor:pointer;padding:12px 0;font:400 11px/1.4 var(--mono);color:var(--muted)}
+details summary:hover{color:var(--fg)}
+img{border-radius:var(--r-lg);background:#fff;padding:12px}
+hr{border:0;border-top:1px solid var(--border);margin:16px 0}
+.actions{display:flex;gap:8px;margin-top:14px}
+.rows{list-style:none;margin:0;padding:0}
+.rows li{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
+.rows li:last-child{border-bottom:0}
+
+@media(max-width:1023px){
+  .sidebar{position:static;width:auto;border-right:0;border-bottom:1px solid var(--sidebar-border)}
+  .brand{padding:16px 16px 12px}
+  .nav{padding:0 8px 10px}.nav p,.side-foot{display:none}
+  .nav ul{flex-direction:row;overflow-x:auto}
+  .nav a{flex:none}
+  .page-wrap{padding-left:0;min-height:0}
+  .top{padding:0 24px}
+  .content{padding:28px 24px 64px}
   .cols{grid-template-columns:1fr}
   .list{position:static;max-height:none}
-  .detail{padding:4px 20px}
-  .bubble{max-width:92%}
 }
-@media(prefers-reduced-motion:reduce){*,::before,::after{animation:none!important;transition:none!important}::view-transition-group(*){animation:none!important}}
+@media(max-width:639px){
+  .crumb,.chip{display:none}
+  .top{padding:0 16px}
+  .content{padding:24px 16px 56px}
+  .ph h1{font-size:28px}
+  .detail{padding:4px 16px}
+  .bubble{max-width:92%}
+  .banner{flex-wrap:wrap}
+}
+@media(prefers-reduced-motion:reduce){*,::before,::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}::view-transition-group(*){animation:none!important}}
 `;
 
-export function Layout(p: { title?: string; refresh?: boolean; banners?: string[]; error?: string; active?: string; attention?: number; wa?: string; children?: Child }) {
+const ICONS: Record<string, string> = {
+  '/': '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  '/pipeline': '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  '/mejoras': '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
+  '/sistema': '<path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>',
+};
+const NAV = [['/', 'Prospectos'], ['/pipeline', 'Pipeline'], ['/mejoras', 'Mejoras'], ['/sistema', 'Sistema']] as const;
+
+const Icon = ({ d }: { d: string }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{raw(d)}</svg>
+);
+
+// Tile de vidrio + glifo blanco + punto signal
+const BRAND = `<defs><linearGradient id="bm" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="oklch(1 0 0 / .14)"/><stop offset="1" stop-color="oklch(1 0 0 / .03)"/></linearGradient></defs>
+<rect x=".75" y=".75" width="30.5" height="30.5" rx="9" fill="url(#bm)" stroke="oklch(1 0 0 / .14)" stroke-width="1.5"/>
+<path d="M10.5 9.5v13M18.5 9.5v13M10.5 16h8" stroke="oklch(.965 .004 262)" stroke-width="2.25" stroke-linecap="round"/>
+<circle cx="23.5" cy="21.5" r="1.9" fill="oklch(.72 .15 250)"/>`;
+
+export function Dot(p: { tone: 'signal' | 'bone' | 'muted'; pulse?: boolean; hollow?: boolean }) {
+  return <span class={['dot', p.tone, p.pulse ? 'pulse' : '', p.hollow ? 'hollow' : ''].filter(Boolean).join(' ')} aria-hidden="true"></span>;
+}
+
+const PILL_DOT: Record<Tone, Child> = {
+  live: <Dot tone="signal" pulse />, positive: <Dot tone="signal" />, attention: <Dot tone="bone" hollow />,
+  neutral: <Dot tone="bone" />, quiet: <Dot tone="muted" hollow />, void: <Dot tone="muted" />,
+};
+
+export function Pill(p: { tone: Tone; children?: Child }) {
+  return <span class={`pill ${p.tone}`}>{PILL_DOT[p.tone]}{p.children}</span>;
+}
+
+export function StatusPill({ status }: { status: Status }) {
+  return <Pill tone={STATUS_TONE[status] ?? 'neutral'}>{STATUS_LABELS[status] ?? status}</Pill>;
+}
+
+export function Layout(p: {
+  title?: string; eyebrow?: string; description?: string; refresh?: boolean; banners?: string[]; error?: string;
+  active?: string; attention?: number; wa?: string; children?: Child;
+}) {
   const n = p.attention ?? 0;
-  const link = (href: string, label: string) => <a href={href} class={p.active === href ? 'on' : undefined} aria-current={p.active === href ? 'page' : undefined}>{label}</a>;
+  const banners = p.banners ?? [];
+  const section = NAV.find(([h]) => h === p.active)?.[1] ?? 'Hub';
+  const waOk = p.wa === 'conectado';
   return (
     <html lang="es">
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         {p.refresh ? <meta http-equiv="refresh" content="30" /> : null}
-        <title>{p.title ?? 'Hub de ventas'}</title>
-        <link rel="preload" href="/fonts/Geist-Regular.woff2" as="font" type="font/woff2" crossorigin="" />
+        <title>{p.title ? `${p.title} · Hub de ventas` : 'Hub de ventas'}</title>
+        <link rel="preload" href="/fonts/Inter-Variable.woff2" as="font" type="font/woff2" crossorigin="" />
+        <link rel="preload" href="/fonts/Sora-Variable.woff2" as="font" type="font/woff2" crossorigin="" />
         <style dangerouslySetInnerHTML={{ __html: CSS }} />
       </head>
       <body>
-        <header class="top">
-          <div class="top-in">
-            <a class="mark" href="/"><span class={n > 0 ? 'pulse live' : 'pulse'}></span>Hub de ventas</a>
-            <nav class="nav">
-              {link('/', 'Prospectos')}
-              {link('/pipeline', 'Pipeline')}
-              {link('/mejoras', 'Mejoras')}
-              {link('/sistema', 'Sistema')}
-            </nav>
-            {p.wa !== undefined ? <div class="wa"><span class={p.wa === 'conectado' ? 'pulse ok' : 'pulse'}></span>WhatsApp {p.wa}</div> : null}
-            <a href="/" class={n > 0 ? 'need on' : 'need'}>
-              {n === 0 ? 'Nada pendiente' : n === 1 ? '1 conversación te necesita' : `${n} conversaciones te necesitan`}
-            </a>
-          </div>
-        </header>
-        <main>
-          {p.error ? <div class="banner error" role="alert">{p.error}</div> : null}
-          {(p.banners ?? []).length > 0 ? <ul class="notices">{(p.banners ?? []).map((b) => <li class="banner">{b}</li>)}</ul> : null}
-          {p.children}
-        </main>
+        <aside class="sidebar">
+          <a class="brand" href="/">
+            <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">{raw(BRAND)}</svg>
+            <span><b>Hub de ventas</b><span>Psicólogos · CRM</span></span>
+          </a>
+          <nav class="nav" aria-label="Principal">
+            <p>Hub</p>
+            <ul>
+              {NAV.map(([href, label]) => (
+                <li>
+                  <a href={href} class={p.active === href ? 'on' : undefined} aria-current={p.active === href ? 'page' : undefined}>
+                    <Icon d={ICONS[href]} />{label}
+                    {href === '/' && n > 0 ? <span class="badge">{n}</span> : null}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+          {p.wa !== undefined ? (
+            <div class="side-foot">
+              <a class="status-card" href="/sistema">
+                <div class="row"><span><Dot tone={waOk ? 'signal' : 'muted'} pulse={waOk} hollow={!waOk} />WhatsApp</span><span class="mono">{p.wa}</span></div>
+                <div class="meter" aria-hidden="true"><i class={waOk ? 'on' : ''}></i><i class={n === 0 ? 'on' : ''}></i><i class={banners.length === 0 ? 'on' : ''}></i></div>
+                <small>{banners.length === 0 ? 'Todo en orden' : banners.length === 1 ? '1 aviso abierto' : `${banners.length} avisos abiertos`}</small>
+              </a>
+            </div>
+          ) : null}
+        </aside>
+        <div class="page-wrap">
+          <header class="top">
+            <p class="crumb" style="margin:0"><span>Hub de ventas</span><i>/</i><b>{section}</b></p>
+            <div class="top-actions">
+              {p.wa !== undefined ? <span class="chip"><Dot tone={waOk ? 'signal' : 'muted'} hollow={!waOk} />WhatsApp {p.wa}</span> : null}
+              <a href="/" class={n > 0 ? 'btn primary' : 'btn'}>
+                {n === 0 ? 'Nada pendiente' : n === 1 ? '1 conversación te necesita' : `${n} conversaciones te necesitan`}
+              </a>
+            </div>
+          </header>
+          <main id="main">
+            <div class="content">
+              {p.title ? (
+                <header class="ph">
+                  {p.eyebrow ? <p class="eyebrow">{p.eyebrow}</p> : null}
+                  <h1>{p.title}</h1>
+                  {p.description ? <p>{p.description}</p> : null}
+                </header>
+              ) : null}
+              {p.error ? <div class="banner error" role="alert">{p.error}</div> : null}
+              {banners.length > 0 ? (
+                <section class="attn">
+                  <div class="attn-h"><Dot tone="signal" />Necesita tu atención<span class="mono">{banners.length === 1 ? '1 aviso' : `${banners.length} avisos`}</span></div>
+                  <ul class="notices">{banners.map((b) => <li class="banner">{b}</li>)}</ul>
+                </section>
+              ) : null}
+              {p.children}
+            </div>
+          </main>
+        </div>
       </body>
     </html>
   );
@@ -220,14 +390,19 @@ export function MetricsBar({ m }: { m: Metrics }) {
   );
 }
 
+// Inicial del nombre sin el título profesional (Lic., Dr., Dra.)
+const initial = (name: string) => (name.replace(/^(lic|lic\.|dra?|dra?\.|psic|psic\.)\s+/i, '').trim()[0] ?? '?').toUpperCase();
+
 export function ProspectList({ prospects, selectedId }: { prospects: Prospect[]; selectedId?: number }) {
   return (
     <div class="list">
-      {prospects.length === 0 ? <div class="item">Todavía no hay prospectos.</div> : null}
+      <div class="list-h"><span>Prospectos</span><span>{prospects.length}</span></div>
+      {prospects.length === 0 ? <div class="empty">Todavía no hay prospectos.</div> : null}
       {prospects.map((p) => (
         <a class={p.id === selectedId ? 'item sel' : 'item'} href={`/p/${p.id}`}>
-          {p.needsAttention ? <span class="pin" aria-label="Te necesita"></span> : null}<strong>{p.name}</strong>
-          <small>{[p.city, STATUS_LABELS[p.status] ?? p.status].filter(Boolean).join(' · ')}</small>
+          <span class="avatar">{initial(p.name)}{p.needsAttention ? <span class="dot signal pulse" aria-label="Te necesita"></span> : null}</span>
+          <span class="item-t"><strong>{p.name}</strong><small>{p.city ?? '—'}</small></span>
+          <StatusPill status={p.status} />
         </a>
       ))}
     </div>
@@ -241,23 +416,33 @@ export function ProspectDetail(p: {
 }) {
   const { prospect: x } = p;
   const ev = x.evaluation as { stage?: unknown; summary?: unknown };
+  const facts: [string, string | null | undefined][] = [
+    ['Ciudad', [x.city, x.province].filter(Boolean).join(', ')], ['Teléfono', x.phoneRaw], ['Email', x.email], ['Sitio web', x.website],
+  ];
   return (
     <div class="detail">
       <div class="card">
-        <h2>{x.name}</h2>
-        <div>{STATUS_LABELS[x.status] ?? x.status}{x.statusReason ? ` (${x.statusReason})` : ''}{x.handedOff ? ' · tomado por Lauri' : ''}</div>
-        <small>{[x.city, x.province, x.phoneRaw, x.email, x.website].filter(Boolean).join(' · ')}</small>
-        {x.needsAttention ? <div><span class="pin"></span>{x.needsAttention}</div> : null}
+        <div class="d-head">
+          <div>
+            <h2>{x.name}</h2>
+            <small>{x.statusReason ? `Motivo: ${x.statusReason}` : null}{x.handedOff ? `${x.statusReason ? ' · ' : ''}Tomado por Lauri` : null}</small>
+          </div>
+          <StatusPill status={x.status} />
+        </div>
+        <dl class="facts" style="margin-bottom:0">
+          {facts.filter(([, v]) => v).map(([k, v]) => <div><dt>{k}</dt><dd>{v}</dd></div>)}
+        </dl>
+        {x.needsAttention ? <div class="need-line"><Dot tone="signal" pulse />{x.needsAttention}</div> : null}
         {x.fitNotes ? <pre>{x.fitNotes}</pre> : null}
       </div>
       <div class="card">
         <h3>Evaluación del agente</h3>
         {ev.stage || ev.summary ? (
           <div>
-            {ev.stage ? <div><strong>Etapa:</strong> {String(ev.stage)}</div> : null}
-            {ev.summary ? <div>{String(ev.summary)}</div> : null}
+            {ev.stage ? <p><span class="tag" style="margin:0 8px 0 0">Etapa</span>{String(ev.stage)}</p> : null}
+            {ev.summary ? <div style="color:var(--muted);line-height:1.65">{String(ev.summary)}</div> : null}
           </div>
-        ) : <div>Sin evaluación todavía.</div>}
+        ) : <div style="color:var(--muted)">Sin evaluación todavía.</div>}
       </div>
       {p.escalations.map((e) => (
         <div class="card ask">
@@ -272,7 +457,7 @@ export function ProspectDetail(p: {
       <div class="card">
         <h3>Chat</h3>
         <div class="chat">
-          {p.messages.length === 0 ? <div>Sin mensajes.</div> : null}
+          {p.messages.length === 0 ? <div style="color:var(--muted)">Sin mensajes.</div> : null}
           {p.messages.map((m) => (
             <div class={`bubble ${m.author}`}>
               <small>{AUTHOR_LABEL[m.author]} · {p.fmt(m.createdAt)}</small>
@@ -285,6 +470,8 @@ export function ProspectDetail(p: {
   );
 }
 
+const VARIANT_TONE: Record<string, Tone> = { activa: 'live', candidata: 'attention', retirada: 'void' };
+
 export function ProposalsView(p: {
   pending: Proposal[];
   stats: { stat: VariantStat; templates: string; verdict: string }[];
@@ -296,33 +483,35 @@ export function ProposalsView(p: {
     <div class="page">
       <div class="card">
         <h2>Propuestas pendientes</h2>
-        {p.pending.length === 0 ? <div>No hay propuestas pendientes.</div> : null}
+        {p.pending.length === 0 ? <div style="color:var(--muted)">No hay propuestas pendientes.</div> : null}
         {p.pending.map((x) => (
           <div class="card">
-            <strong>{kind[x.kind] ?? x.kind}:</strong> {x.summary}
-            <div><em>Evidencia:</em></div><pre>{x.evidence}</pre>
-            <div><em>Contenido propuesto:</em></div><pre>{x.proposedContent}</pre>
-            <form method="post" action={`/proposals/${x.id}/approve`} style="display:inline">
-              <button type="submit">Aprobar</button>
-            </form>{' '}
-            <form method="post" action={`/proposals/${x.id}/reject`} style="display:inline">
-              <button class="no" type="submit">Rechazar</button>
-            </form>
+            <p><span class="tag" style="margin:0 8px 0 0">{kind[x.kind] ?? x.kind}</span>{x.summary}</p>
+            <h4>Evidencia</h4><pre>{x.evidence}</pre>
+            <h4>Contenido propuesto</h4><pre>{x.proposedContent}</pre>
+            <div class="actions">
+              <form method="post" action={`/proposals/${x.id}/approve`}>
+                <button type="submit">Aprobar</button>
+              </form>
+              <form method="post" action={`/proposals/${x.id}/reject`}>
+                <button class="no" type="submit">Rechazar</button>
+              </form>
+            </div>
           </div>
         ))}
       </div>
-      <div class="card">
+      <div class="card" style="overflow-x:auto">
         <h2>Aperturas (A/B)</h2>
         <table>
           <thead><tr><th>Variante</th><th>Estado</th><th>Contactos</th><th>Respuestas</th><th>Avanzaron</th><th>Veredicto</th></tr></thead>
           <tbody>
             {p.stats.map((s) => (
               <tr>
-                <td>#{s.stat.variantId}<pre>{s.templates}</pre></td>
-                <td>{s.stat.status}</td>
-                <td>{s.stat.contacted}</td>
-                <td>{s.stat.replied}</td>
-                <td>{s.stat.advanced}</td>
+                <td><span class="mono">#{s.stat.variantId}</span><pre>{s.templates}</pre></td>
+                <td><Pill tone={VARIANT_TONE[s.stat.status] ?? 'neutral'}>{s.stat.status}</Pill></td>
+                <td class="mono">{s.stat.contacted}</td>
+                <td class="mono">{s.stat.replied}</td>
+                <td class="mono">{s.stat.advanced}</td>
                 <td>{s.verdict}</td>
               </tr>
             ))}
@@ -349,28 +538,33 @@ export function SystemView(p: {
     <div class="page">
       <div class="card">
         <h2>WhatsApp</h2>
-        <div>Estado: <strong>{p.waState}</strong></div>
+        <Pill tone={p.waState === 'conectado' ? 'live' : p.waState === 'qr' ? 'attention' : 'quiet'}>{p.waState}</Pill>
         {p.qrDataUrl ? (
-          <div>
-            <p>Escaneá este QR desde WhatsApp en tu celular (Dispositivos vinculados).</p>
+          <div style="margin-top:16px">
+            <p style="color:var(--muted)">Escaneá este QR desde WhatsApp en tu celular (Dispositivos vinculados).</p>
             <img src={p.qrDataUrl} alt="QR de WhatsApp" width="280" height="280" />
           </div>
         ) : null}
       </div>
       <div class="card">
         <h2>Reuniones próximas</h2>
-        {p.meetings.length === 0 ? <div>No hay reuniones próximas.</div> : null}
-        {p.meetings.map((m) => (
-          <div>{p.fmt(m.startsAt)} · <a href={`/p/${m.prospectId}`}>{p.names.get(m.prospectId) ?? `#${m.prospectId}`}</a>
-            {m.meetUrl ? <> · <a href={m.meetUrl}>Meet</a></> : null}</div>
-        ))}
+        {p.meetings.length === 0 ? <div style="color:var(--muted)">No hay reuniones próximas.</div> : null}
+        <ul class="rows">
+          {p.meetings.map((m) => (
+            <li>
+              <span class="mono" style="color:var(--muted)">{p.fmt(m.startsAt)}</span>
+              <a href={`/p/${m.prospectId}`}>{p.names.get(m.prospectId) ?? `#${m.prospectId}`}</a>
+              {m.meetUrl ? <a href={m.meetUrl} class="btn" style="margin-left:auto">Meet</a> : null}
+            </li>
+          ))}
+        </ul>
       </div>
-      <div class="card">
+      <div class="card" style="overflow-x:auto">
         <h2>Últimos eventos</h2>
         <table>
           <tbody>
             {p.events.map((e) => (
-              <tr><td>{p.fmt(e.createdAt)}</td><td>{e.type}</td><td><small>{JSON.stringify(e.payload)}</small></td></tr>
+              <tr><td class="t">{p.fmt(e.createdAt)}</td><td class="mono">{e.type}</td><td><small class="mono">{JSON.stringify(e.payload)}</small></td></tr>
             ))}
           </tbody>
         </table>

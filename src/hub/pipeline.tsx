@@ -7,7 +7,7 @@ import {
   listOpenEscalations, listPendingOutbox, listProposals, listRecentMessages, listUpcomingMeetings, listVariants,
   type EventRow, type ManualKind, type OutboxItem, type Message, type Status,
 } from '../db/repo.js';
-import { Layout, STATUS_LABELS } from './views.js';
+import { Dot, Layout, STATUS_LABELS } from './views.js';
 
 export const MAIN_STATUSES: Status[] = ['encontrado', 'contactado', 'conversando', 'interesado', 'reunion_agendada', 'listo_para_cerrar'];
 export const SIDE_STATUSES: Status[] = ['rechazado', 'sin_respuesta', 'baja', 'descartado'];
@@ -126,37 +126,41 @@ export async function loadPipelineData(db: Db, config: Config, now: Date): Promi
 }
 
 const PIPELINE_CSS = `
-.frame{background:#0d0d0d;border:1px solid var(--lift);border-radius:var(--r-card);margin-bottom:56px;overflow:hidden;animation:enciende .2s var(--ease) both}
-@keyframes enciende{from{opacity:0}}
-.frame-bar{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--lift);font:400 12px/1 var(--mono);text-transform:uppercase;color:var(--stone)}
-.frame-bar i{width:10px;height:10px;border-radius:50%;background:var(--stroke);display:inline-block}
+.frame{background:var(--surface) linear-gradient(180deg,oklch(1 0 0/2.5%),transparent 120px);border:1px solid var(--border);border-radius:var(--r-xl);margin-bottom:24px;overflow:hidden}
+.frame-bar{display:flex;align-items:center;gap:8px;padding:12px 20px;border-bottom:1px solid var(--border);font:400 10px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.frame-bar i{width:8px;height:8px;border-radius:50%;background:oklch(1 0 0/10%);display:inline-block}
 .frame-bar span{margin-left:12px;display:flex;align-items:center;gap:8px}
-.frame-body{padding:24px}
+.frame-body{padding:20px}
 .frame-body h3{display:none}
-.flow{display:flex;flex-wrap:wrap;align-items:stretch;margin-bottom:16px}
+.flow{display:flex;flex-wrap:wrap;align-items:stretch;margin-bottom:14px}
 .flow:last-child{margin-bottom:0}
-.node{border:1px solid var(--lift);border-radius:var(--r-sm);padding:12px 14px;min-width:0;flex:1 1 96px;font-size:14px;overflow-wrap:anywhere;line-height:1.43;color:var(--bone);transition:border-color .15s var(--ease)}
-.node:hover{border-color:var(--stroke)}
-.node b{display:block;font:400 12px/1.3 var(--mono);text-transform:uppercase;letter-spacing:-.24px;color:var(--stone);margin-bottom:6px}
-.node.lauri{background:var(--bone);color:var(--ink);border-color:var(--bone)}
-.node.lauri b{color:var(--graphite)}
-.node.lauri b::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--orange);margin-right:8px;vertical-align:1px}
-.node.ext{border-style:dashed;color:var(--granite)}
-.arrow{align-self:center;flex:0 0 14px;height:1px;background:var(--stroke);font-size:0}
-.agents{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:24px;margin-bottom:56px}
+.node{border:1px solid var(--border);background:oklch(1 0 0/.02);border-radius:var(--r-lg);padding:10px 12px;min-width:0;flex:1 1 96px;font-size:13px;overflow-wrap:anywhere;line-height:1.45;transition:border-color .2s var(--ease),background-color .2s var(--ease)}
+.node:hover{border-color:oklch(1 0 0/15%);background:oklch(1 0 0/.035)}
+.node b{display:block;font:400 10px/1.4 var(--mono);text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:6px}
+.node.lauri{border-color:oklch(.72 .15 250/30%);background:oklch(.72 .15 250/.05)}
+.node.lauri b{color:var(--fg)}
+.node.lauri b::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--signal);box-shadow:0 0 8px var(--signal);margin-right:8px;vertical-align:1px}
+.node.ext{border-style:dashed;background:transparent;color:var(--muted)}
+.arrow{align-self:center;flex:0 0 14px;height:1px;background:oklch(1 0 0/15%);font-size:0}
+.agents{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:20px;margin-bottom:20px}
 .agents .card{margin:0}
-.agents ul,.agents ol{margin:0;padding-left:18px;font-size:14px;line-height:1.43;color:var(--stone)}
-.agents h3{font-size:24px;letter-spacing:-.6px;line-height:1.1}
-.err{color:var(--orange)}
-.fun{display:grid;grid-template-columns:160px 1fr 48px;align-items:center;gap:16px;margin:10px 0;font-size:14px}
-.fun span{color:var(--stone)}
-.fun .track{height:2px;background:var(--lift)}
-.fun .bar{height:100%;background:var(--green);min-width:2px;transition:width .2s var(--ease)}
-.fun.side .bar{background:var(--graphite)}
-.fun b{font-weight:400;text-align:right;font-family:var(--mono);font-size:13px}
-.ev.error td{color:var(--orange)}
+.agents .card > div:first-of-type{color:oklch(.965 .004 262/90%);margin-bottom:4px}
+.agents ul,.agents ol{margin:0;padding-left:18px;font-size:13px;line-height:1.55;color:var(--muted)}
+.agents h3{font-size:17px}
+.err{display:flex;gap:8px;align-items:baseline;color:var(--fg)}
+.err::before{content:'';width:6px;height:6px;flex:none;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--fg)}
+.fun{display:grid;grid-template-columns:160px 1fr 48px;align-items:center;gap:16px;margin:10px 0;font-size:13px}
+.fun span{color:var(--muted)}
+.fun .track{height:6px;border-radius:9px;background:oklch(1 0 0/.04);overflow:hidden}
+.fun .bar{height:100%;border-radius:9px;background:var(--signal);min-width:2px;transform-origin:left;animation:crece .8s var(--ease) both}
+@keyframes crece{from{transform:scaleX(0)}}
+.fun.side .bar{background:var(--chart2)}
+.fun b{font:400 11px/1 var(--mono);text-align:right}
+.ev td{color:var(--muted)}
+.ev.error td{color:var(--fg)}
+.ev.error td.mono:first-of-type::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--fg);margin-right:8px;vertical-align:1px}
 .scroll{overflow-x:auto}
-@media(max-width:860px){.flow{flex-direction:column}.arrow{flex:0 0 14px;width:1px;height:14px}.node{flex:none}.fun{grid-template-columns:110px 1fr 36px}.frame-body{padding:16px}}
+@media(max-width:860px){.flow{flex-direction:column}.arrow{flex:0 0 14px;width:1px;height:14px;margin-left:18px}.node{flex:none}.fun{grid-template-columns:110px 1fr 36px}.frame-body{padding:16px}}
 `;
 
 const AUTHOR: Record<Message['author'], string> = { prospect: 'Psicólogo', agent: 'Agente', lauri: 'Lauri' };
@@ -206,10 +210,8 @@ export function PipelineView({ d, config, fmt }: { d: PipelineData; config: Conf
   return (
     <div class="page">
       <style dangerouslySetInnerHTML={{ __html: PIPELINE_CSS }} />
-      <h2>Pipeline de agentes</h2>
-
       <div class="frame">
-        <div class="frame-bar"><i></i><i></i><i></i><span><span class={d.escalacionesAbiertas > 0 ? 'pulse live' : 'pulse ok'}></span>Flujo de agentes en vivo</span></div>
+        <div class="frame-bar"><i></i><i></i><i></i><span><Dot tone="signal" pulse />Flujo de agentes en vivo</span></div>
         <div class="frame-body">
         <h3>Flujo</h3>
         <div class="flow">
@@ -272,7 +274,7 @@ export function PipelineView({ d, config, fmt }: { d: PipelineData; config: Conf
           <tbody>
             {d.messages.map((m) => (
               <tr>
-                <td>{fmt(m.createdAt)}</td>
+                <td class="t">{fmt(m.createdAt)}</td>
                 <td><a href={`/p/${m.prospectId}`}>{m.prospectName}</a></td>
                 <td>{m.direction === 'in' ? 'Entrante' : 'Saliente'}</td>
                 <td>{AUTHOR[m.author]}</td>
@@ -290,7 +292,7 @@ export function PipelineView({ d, config, fmt }: { d: PipelineData; config: Conf
           <table>
             <thead><tr><th>Destino</th><th>Enviar después de</th><th>Tipo</th></tr></thead>
             <tbody>
-              {d.outboxPendiente.map((o) => <tr><td class="mono">{o.toWaId}</td><td>{fmt(o.sendAfter)}</td><td>{o.kind}</td></tr>)}
+              {d.outboxPendiente.map((o) => <tr><td class="mono">{o.toWaId}</td><td class="t">{fmt(o.sendAfter)}</td><td>{o.kind}</td></tr>)}
             </tbody>
           </table>
         )}
@@ -302,7 +304,7 @@ export function PipelineView({ d, config, fmt }: { d: PipelineData; config: Conf
           <tbody>
             {d.events.map((e) => (
               <tr class={isErrorEvent(e.type) ? 'ev error' : 'ev'}>
-                <td>{fmt(e.createdAt)}</td><td class="mono">{e.type}</td><td class="mono">{oneLine(e.payload)}</td>
+                <td class="t">{fmt(e.createdAt)}</td><td class="mono">{e.type}</td><td class="mono">{oneLine(e.payload)}</td>
               </tr>
             ))}
           </tbody>
@@ -314,7 +316,7 @@ export function PipelineView({ d, config, fmt }: { d: PipelineData; config: Conf
 
 export function PipelinePage(p: { d: PipelineData; config: Config; fmt: (x: Date) => string; chrome: { banners: string[]; attention: number; wa: string; active: string } }) {
   return (
-    <Layout title="Pipeline" refresh {...p.chrome}>
+    <Layout title="Pipeline de agentes" eyebrow="Agentes en vivo" description="Qué hace cada agente, con qué modelo y qué pasó en las últimas 24 horas." refresh {...p.chrome}>
       <PipelineView d={p.d} config={p.config} fmt={p.fmt} />
     </Layout>
   );

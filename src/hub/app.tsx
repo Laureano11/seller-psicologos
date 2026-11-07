@@ -14,8 +14,8 @@ import { approveProposal, rejectProposal } from '../learning/proposals.js';
 import { PipelinePage, loadPipelineData } from './pipeline.js';
 import { Layout, MetricsBar, ProposalsView, ProspectDetail, ProspectList, SystemView, computeMetrics } from './views.js';
 
-// Tipografías propias (Geist, licencia OFL) servidas por el hub: sin CDNs
-const FONTS = new Set(['Geist-Regular.woff2', 'Geist-Medium.woff2', 'GeistMono-Regular.woff2']);
+// Tipografías propias (Sora, Inter y JetBrains Mono, licencia OFL) servidas por el hub: sin CDNs
+const FONTS = new Set(['Sora-Variable.woff2', 'Inter-Variable.woff2', 'JetBrainsMono-Variable.woff2']);
 const fontCache = new Map<string, Buffer>();
 
 export interface HubDeps {
@@ -85,7 +85,7 @@ export function createHubApp(deps: HubDeps) {
       detail = <ProspectDetail prospect={prospect} messages={await listMessages(db, prospect.id)} escalations={escalations} fmt={fmt} />;
     }
     return c.html(
-      <Layout refresh={!hasForm} {...await chrome('/')} error={c.req.query('error')}>
+      <Layout title="Prospectos" eyebrow="Centro de control" description="Todo lo que los agentes encontraron, conversaron y escalaron, actualizado en vivo." refresh={!hasForm} {...await chrome('/')} error={c.req.query('error')}>
         <MetricsBar m={computeMetrics(prospects)} />
         <div class="cols">
           <ProspectList prospects={prospects} selectedId={selectedId} />
@@ -135,7 +135,7 @@ export function createHubApp(deps: HubDeps) {
       return { stat: s, templates: variants.find((v) => v.id === s.variantId)?.template ?? '', verdict };
     });
     return c.html(
-      <Layout title="Mejoras" {...await chrome('/mejoras')} error={c.req.query('error')}>
+      <Layout title="Mejoras" eyebrow="Aprendizaje" description="Propuestas del analista, resultados de las aperturas A/B e historial del manual de ventas." {...await chrome('/mejoras')} error={c.req.query('error')}>
         <ProposalsView pending={await listProposals(db, 'pendiente')} stats={rows} manuals={await listManualVersions(db, 'ventas')} fmt={fmt} />
       </Layout>,
     );
@@ -163,7 +163,7 @@ export function createHubApp(deps: HubDeps) {
     const meetings = await listUpcomingMeetings(db, new Date());
     const names = new Map((await listProspectsForHub(db)).map((p) => [p.id, p.name]));
     return c.html(
-      <Layout title="Sistema" {...await chrome('/sistema')} error={c.req.query('error')}>
+      <Layout title="Sistema" eyebrow="Operación" description="Conexión de WhatsApp, reuniones agendadas y el registro de eventos." {...await chrome('/sistema')} error={c.req.query('error')}>
         <SystemView waState={wa?.state ?? 'sin estado'} qrDataUrl={qrDataUrl} events={await listEvents(db, 50)} meetings={meetings} names={names} fmt={fmt} />
       </Layout>,
     );
