@@ -37,14 +37,21 @@ El formato es una lista `proveedor:modelo` separada por comas; el orden es el or
 
 No hay que tocar código.
 
-## 3. Google Places (Buscador)
+## 3. Buscador: navegador y Google Places
+
+El Buscador busca psicólogos con un **Chromium sin pantalla** dentro del contenedor `worker`, con un perfil propio (volumen `browser_profile`). No hace falta configurar nada: viene listo en la imagen de Docker. El motor principal es **Bing** (`BUSCADOR_ENGINE`), porque Google y DuckDuckGo le piden CAPTCHA al navegador automatizado.
+
+Qué busca y cómo extrae los datos se edita en dos archivos de texto (ver §6): `content/buscador-consultas.md` y `content/buscador-instrucciones.md`. La guía completa del agente está en [`src/agents/buscador/README.md`](src/agents/buscador/README.md).
+
+**Google Places es opcional:** si cargás una clave, se suma como fuente extra.
+
 
 1. Entrá a https://console.cloud.google.com, creá un proyecto (o usá uno existente) y activá la facturación. Google da un crédito mensual gratuito que alcanza de sobra para ~50 búsquedas por día.
 2. En "APIs y servicios" → "Biblioteca", activá **Places API (New)**.
 3. En "Credenciales" → "Crear credenciales" → "Clave de API". Restringila a Places API.
 4. Pegala en `GOOGLE_PLACES_KEY`.
 
-Sin esta clave, el buscador no encuentra psicólogos nuevos.
+Sin esta clave, el Buscador usa solo el navegador.
 
 ## 4. Google Calendar + Gmail (Agenda)
 
@@ -86,8 +93,10 @@ Hoy son plantillas. Reemplazalas con tu contenido real:
 | `content/manual-ventas.md` | Tus métodos y patrones de venta. |
 | `content/estilo.md` | Tu forma de escribir, explicada en detalle, con ejemplos de mensajes reales tuyos. |
 | `content/apertura.md` | El primer mensaje que se manda a cada psicólogo. |
+| `content/buscador-consultas.md` | Qué escribe el Buscador en el buscador web, una consulta por línea, con `{ciudad}` y `{provincia}`. |
+| `content/buscador-instrucciones.md` | Las instrucciones que la IA del Buscador sigue para sacar nombre, celular y email de cada página. |
 
-Los cambios se toman al reiniciar el worker: `docker compose restart worker`.
+Los cambios en los cuatro primeros se toman al reiniciar el worker: `docker compose restart worker`. Los dos del Buscador se releen en cada búsqueda, sin reiniciar.
 
 ## 7. Elegir el servidor y dejar el hub online 24/7
 
@@ -131,6 +140,13 @@ Recordá que usar WhatsApp personal con automatización va contra los términos 
 | `MEETING_MINUTES` | 30 | Duración de cada reunión. |
 | `SEARCH_HOUR` | 9 | Hora en que corre el buscador. |
 | `BUSCADOR_MAX_PER_DAY` | 50 | Máximo de prospectos nuevos por día. |
+| `BUSCADOR_MAX_SEARCHES` | 25 | Búsquedas en el buscador web por corrida. |
+| `BUSCADOR_MAX_PAGES` | 150 | Páginas abiertas por corrida. |
+| `BUSCADOR_RESULTS_PER_QUERY` | 10 | Resultados que abre de cada búsqueda. |
+| `BUSCADOR_MAX_WA_CHECKS` | 150 | Consultas a WhatsApp ("¿tiene WhatsApp?") por corrida. Protege tu número. |
+| `BUSCADOR_SEARCH_DELAY` | 20-60 | Pausa aleatoria entre búsquedas, en segundos. |
+| `BUSCADOR_PAGE_DELAY` | 3-8 | Pausa aleatoria entre páginas, en segundos. |
+| `BUSCADOR_ENGINE` | bing | Motor principal: `bing`, `google` o `duckduckgo`. Los otros quedan de respaldo. |
 | `FOLLOWUP_DAYS` / `MAX_FOLLOWUPS` | 3 / 1 | Cuándo y cuántas veces se hace seguimiento si no responden. |
 | `CLOSE_AFTER_DAYS` | 4 | Días sin respuesta tras el seguimiento antes de marcar "sin respuesta". |
 | `AB_MIN_PER_VARIANT` | 30 | Contactos mínimos por variante antes de proponer un cambio A/B. |
@@ -140,7 +156,7 @@ Recordá que usar WhatsApp personal con automatización va contra los términos 
 
 - [ ] `.env` con `OWNER_WA_ID` y al menos una clave de IA
 - [ ] `HUB_PASSWORD` fuerte antes de publicar el hub en internet
-- [ ] `GOOGLE_PLACES_KEY`
+- [ ] `GOOGLE_PLACES_KEY` (opcional)
 - [ ] OAuth de Google + `npm run google:auth` → `GOOGLE_REFRESH_TOKEN`
 - [ ] `data/no_llame.csv` + `DNC_MODE=file`
 - [ ] `content/*.md` con tu contenido real

@@ -18,7 +18,7 @@ Un equipo de agentes que trabaja 24/7 para conseguir clientes de **PsycoPy**: bu
 
 | Pieza | Tipo | Idea en una línea |
 |---|---|---|
-| **Buscador** | Agente con IA | Encuentra psicólogos que podrían ser clientes. |
+| **Buscador** | Agente con IA | Busca psicólogos en la web con un navegador y anota nombre, celular y email. |
 | **Vendedor** | Agente con IA | Conversa con ellos por WhatsApp hasta que empiezan la prueba gratis. |
 | **Agenda** | Herramienta del Vendedor | Agenda demos en el calendario de Lauri. |
 | **Analista** | Agente con IA | Estudia los resultados y propone cómo vender mejor. |
@@ -36,51 +36,58 @@ Todas las fichas siguen el mismo esquema: **idea → función → cuándo actúa
 
 ## 1. Agente Buscador
 
-**Código:** `src/agents/buscador/` · **Modelo:** `LLM_BUSCADOR`
+**Código:** `src/agents/buscador/` · **Modelo:** `LLM_BUSCADOR` · **Guía para modificarlo:** [`src/agents/buscador/README.md`](src/agents/buscador/README.md)
 
 ### Idea
-Es el que **llena el embudo**. Sin el Buscador, el Vendedor no tiene a quién escribirle. Hace lo que haría una persona con una tarde libre y Google Maps: buscar psicólogos, mirar sus webs y anotar quién vale la pena contactar. Siempre respetando la ley.
+Es el que **llena el embudo**, y lo hace con **volumen**. Busca en la web como lo haría una persona: abre un navegador, escribe "psicólogo en {ciudad}", entra a los listados y a las webs que aparecen y anota **nombre, celular y email**. Nada más. Si el psicólogo es buen cliente se averigua después, en la charla con el Vendedor.
 
 ### Función
-1. **Buscar** psicólogos en Google Places ("psicólogo en {ciudad}, {provincia}, Argentina"), recorriendo una lista de ciudades (`cities.ts`). Guarda en qué ciudad quedó para retomar al día siguiente.
-2. **Enriquecer:** si el psicólogo tiene web, la lee y la IA extrae email, WhatsApp, si atiende **solo o en equipo**, qué herramientas usa (turnos online, agenda, videollamada, pagos), especialidad y obras sociales. Con eso arma notas de qué tan buen candidato parece.
-3. **Filtrar**, en este orden, y descartar al que:
-   - no tiene teléfono,
+1. **Buscar** con un Chromium sin pantalla (perfil propio, nunca el Chrome de Lauri) en **Bing**. Google y DuckDuckGo quedan de respaldo, porque piden CAPTCHA al navegador automatizado. Recorre ciudad por ciudad (`cities.ts`) las consultas de `content/buscador-consultas.md`.
+2. **Abrir** solo los resultados orgánicos. Saltea redes sociales (LinkedIn, Facebook, Instagram, X, TikTok, YouTube) y lo que prohíbe el `robots.txt` del sitio.
+3. **Extraer:** si la página tiene algún teléfono, la IA saca la lista de psicólogos con nombre, celular y email, siguiendo `content/buscador-instrucciones.md`. Un celular que no aparece textual en la página se descarta.
+4. **Filtrar**, en este orden, y descartar al que:
+   - por el nombre es un centro, instituto, equipo, fundación, clínica o asociación,
+   - no tiene teléfono válido,
    - ya está en la base (mismo número = misma persona),
    - pidió la baja alguna vez,
    - está inscripto en el **Registro No Llame** (Ley 26.951),
    - no tiene WhatsApp.
-4. **Guardar** la ficha del prospecto, lista para que la use el Vendedor.
+5. **Guardar** la ficha mínima, con el link exacto de dónde salió el dato.
+
+Google Places sigue como fuente extra solo si hay `GOOGLE_PLACES_KEY`.
 
 ### Cuándo actúa
-Una vez por día, desde las **9:00** (`SEARCH_HOUR`). Lo despierta el Orquestador.
+Una vez por día, desde las **9:00** (`SEARCH_HOUR`). Lo despierta el Orquestador y corre **en segundo plano** (puede tardar más de una hora por las pausas), sin frenar las respuestas del Vendedor. Para forzar una corrida hoy: `docker compose exec worker npm run buscador`.
 
 ### Qué recibe
-- Resultados de Google Places y el texto de las webs de los psicólogos.
+- Las páginas de resultados y las páginas de psicólogos que abre el navegador.
+- Las consultas y las instrucciones de `content/`.
 - La lista del Registro No Llame (`data/no_llame.csv`) y la lista de bajas.
 
 ### Qué entrega
-- Prospectos nuevos en estado **`encontrado`**, con su ficha: nombre, WhatsApp, email, ciudad, web, tipo de práctica, herramientas detectadas y notas de "fit".
-- Un informe de la corrida (`buscador_run`): cuántos encontró, cuántos guardó y por qué descartó al resto.
+- Prospectos nuevos en estado **`encontrado`** con: nombre, WhatsApp, email (si hay), ciudad, fuente (`bing` / `google` / `duckduckgo` / `google_places`) y **link de la página** donde apareció (para responder "¿de dónde sacaste mi número?").
+- Un informe de la corrida (`buscador_run`): encontrados, guardados, motivos de descarte, búsquedas, páginas, consultas a WhatsApp, motor usado, si hubo CAPTCHA y por qué terminó.
 
 ### Con quién se comunica
-- **Orquestador:** lo despierta.
+- **Orquestador:** lo despierta y lo frena al apagar el sistema.
 - **Gateway de WhatsApp:** le pregunta si un número tiene WhatsApp.
+- **Lauri:** le avisa por WhatsApp si un buscador le pidió CAPTCHA (una vez por corrida).
 - **Vendedor:** indirectamente, porque le deja las fichas en la base.
 
 ### Qué decide
-Si un psicólogo entra o no a la base, y qué datos de su ficha son ciertos según lo que dice su web.
+Qué resultados abrir y quién de cada página es un psicólogo con celular.
 
 ### Qué NO puede hacer
 - Escribirle a nadie.
 - Guardar a alguien sin chequear el Registro No Llame. **Si falta el archivo, no guarda a nadie.**
-- Inventar datos: lo que no aparece en la web queda vacío o como "desconocido".
-- Superar **50 prospectos nuevos por día** (`BUSCADOR_MAX_PER_DAY`).
-- Hacer scraping masivo de redes sociales (LinkedIn o Instagram).
+- Inventar datos: nombre, celular y email salen textuales de la página.
+- Resolver o esquivar CAPTCHAs, entrar a páginas con login o completar formularios.
+- Usar LinkedIn o redes sociales.
+- Pasarse de los topes por corrida: **50 prospectos** (`BUSCADOR_MAX_PER_DAY`), 25 búsquedas, 150 páginas y **150 consultas a WhatsApp**. Todos se configuran en `.env`.
 
 ### Estado
-✅ Implementado.
-🟡 Sugerido: no pasarle al Vendedor a los que atienden **en equipo**, porque PsycoPy hoy es para un solo profesional. Se guardan para la Fase 2.
+✅ Implementado (navegador, Bing con respaldo, ficha mínima, segundo plano).
+Pendiente: probar una corrida completa en el servidor con Docker, WhatsApp e IA reales.
 
 ---
 
@@ -492,7 +499,7 @@ Como la prueba dura hasta 2 semanas, quien empieza a probar después del día ~1
 
 ## 8. Sugerencias
 
-1. **No contactar consultorios en equipo** (el Buscador ya los detecta). Cada contacto cuenta en un cupo de 5 por día.
+1. **No contactar consultorios en equipo.** El Buscador ya descarta los obvios por el nombre; el resto lo detecta el Vendedor en la charla.
 2. **Saber quién se registró de verdad:** leer en modo solo lectura la tabla `psicologo` de PsycoPy, cruzando por email (el agente pide el email antes de mandar el link). Así se mide la prueba real y se le escribe solo a quien corresponde.
 3. **Concentrar contactos en la primera quincena**, o usar una prueba de 7 días.
 4. **Marcar en el hub cuando alguien paga** y sumar las métricas "links enviados → registrados → pagaron". Hoy el sistema no se entera de una venta cerrada.
