@@ -12,8 +12,7 @@
     "worker": "tsx src/worker.ts",
     "hub": "tsx src/hub/server.ts",
     "google:auth": "tsx scripts/google-auth.ts",
-    "buscador": "tsx src/buscador-ahora.ts",
-    "buscador:prueba": "tsx src/buscador-prueba.ts"
+    "buscador": "tsx src/buscador.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.97",
@@ -31,7 +30,6 @@
     "luxon": "^3.7.2",
     "pg": "^8.23.1",
     "pino": "^10.4.0",
-    "playwright": "1.65.0",
     "qrcode": "^1.5.4",
     "zod": "^4.6.7"
   },

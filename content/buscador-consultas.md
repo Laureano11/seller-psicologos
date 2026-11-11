@@ -1,9 +1,9 @@
 <!--
-Consultas que el Buscador escribe en Google (o DuckDuckGo) para cada ciudad.
+Consultas que el agente de Claude escribe en el buscador web para cada ciudad.
 - Una consulta por línea.
-- {ciudad} y {provincia} se reemplazan por la ciudad que se está buscando.
+- {ciudad} y {provincia} se reemplazan por la ciudad de la corrida.
 - Las líneas vacías y las que empiezan con # se ignoran.
-- El agente relee este archivo al empezar cada búsqueda: no hace falta reiniciar nada.
+- Se relee en cada corrida: no hace falta reiniciar nada.
 -->
 psicólogo {ciudad} whatsapp
 psicóloga {ciudad} consultorio

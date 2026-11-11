@@ -22,11 +22,10 @@ services:
     environment:
       TZ: America/Argentina/Buenos_Aires
       DATABASE_URL: postgres://seller:seller@db:5432/seller
-      BUSCADOR_PROFILE_DIR: /app/browser_profile
     volumes:
       - wa_auth:/app/wa_auth
-      - browser_profile:/app/browser_profile
-      - ./data:/app/data:ro
+      # lee data/prospectos.json (lo escribe el Buscador en la Mac) y escribe solo data/bajas.json
+      - ./data:/app/data
       - ./content:/app/content
     depends_on:
       db:
@@ -43,6 +42,7 @@ services:
       PORT: "3000"
     volumes:
       - ./content:/app/content
+      - ./data:/app/data:ro
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
@@ -60,4 +60,3 @@ services:
 volumes:
   pgdata:
   wa_auth:
-  browser_profile:

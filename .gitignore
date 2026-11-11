@@ -5,4 +5,5 @@ dist
 wa_auth/
 data/*
 !data/.gitkeep
+browser_profile/
 browser_profile_prueba/

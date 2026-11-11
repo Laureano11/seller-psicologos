@@ -6,7 +6,7 @@
 >
 > El producto que se vende está descrito en [`Business_crm.md`](Business_crm.md). La instalación está en [`README.md`](README.md) y [`CONFIGURACION.md`](CONFIGURACION.md).
 >
-> Estado al 2026-11-07. Cada punto está marcado como ✅ **implementado** (existe en el código) o 🟡 **decidido, falta implementar**.
+> Estado al 2026-11-11. Cada punto está marcado como ✅ **implementado** (existe en el código) o 🟡 **decidido, falta implementar**.
 
 ---
 
@@ -18,7 +18,7 @@ Un equipo de agentes que trabaja 24/7 para conseguir clientes de **PsycoPy**: bu
 
 | Pieza | Tipo | Idea en una línea |
 |---|---|---|
-| **Buscador** | Agente con IA | Busca psicólogos en la web con un navegador y anota nombre, celular y email. |
+| **Buscador** | Agente de Claude (en la Mac) | Busca psicólogos en la web con un navegador y los anota en `data/prospectos.json`. |
 | **Vendedor** | Agente con IA | Conversa con ellos por WhatsApp hasta que empiezan la prueba gratis. |
 | **Agenda** | Herramienta del Vendedor | Agenda demos en el calendario de Lauri. |
 | **Analista** | Agente con IA | Estudia los resultados y propone cómo vender mejor. |
@@ -36,58 +36,59 @@ Todas las fichas siguen el mismo esquema: **idea → función → cuándo actúa
 
 ## 1. Agente Buscador
 
-**Código:** `src/agents/buscador/` · **Modelo:** `LLM_BUSCADOR` · **Guía para modificarlo:** [`src/agents/buscador/README.md`](src/agents/buscador/README.md)
+**Código:** `src/agents/buscador/` · **Modelo:** Claude Code (`claude -p`, Sonnet) con navegador · **Guía para modificarlo:** [`src/agents/buscador/README.md`](src/agents/buscador/README.md)
 
 ### Idea
-Es el que **llena el embudo**, y lo hace con **volumen**. Busca en la web como lo haría una persona: abre un navegador, escribe "psicólogo en {ciudad}", entra a los listados y a las webs que aparecen y anota **nombre, celular y email**. Nada más. Si el psicólogo es buen cliente se averigua después, en la charla con el Vendedor.
+Es el que **llena el embudo**, y lo hace con **volumen**. Busca en la web como lo haría una persona: un agente de Claude abre un navegador, escribe "psicólogo en {ciudad}", entra a los listados y a las webs que aparecen y anota **nombre, celular y email**. Nada más. Si el psicólogo es buen cliente se averigua después, en la charla con el Vendedor.
+
+Corre **en la Mac de Lauri, sin Docker y sin claves**: usa la sesión de Claude Code ya logueada. No necesita configuración de terceros.
 
 ### Función
-1. **Buscar** con un Chromium sin pantalla (perfil propio, nunca el Chrome de Lauri) en **Bing**. Google y DuckDuckGo quedan de respaldo, porque piden CAPTCHA al navegador automatizado. Recorre ciudad por ciudad (`cities.ts`) las consultas de `content/buscador-consultas.md`.
-2. **Abrir** solo los resultados orgánicos. Saltea redes sociales (LinkedIn, Facebook, Instagram, X, TikTok, YouTube) y lo que prohíbe el `robots.txt` del sitio.
-3. **Extraer:** si la página tiene algún teléfono, la IA saca la lista de psicólogos con nombre, celular y email, siguiendo `content/buscador-instrucciones.md`. Un celular que no aparece textual en la página se descarta.
-4. **Filtrar**, en este orden, y descartar al que:
+1. **Buscar:** `npm run buscador` lanza el agente de Claude con un navegador propio (Playwright MCP, perfil `browser_profile/`, nunca el Chrome de Lauri). Cada corrida trabaja una ciudad (`cities.ts`) con las consultas de `content/buscador-consultas.md` y sigue `content/buscador-instrucciones.md`. No entra a redes sociales, no completa formularios, no hace login ni resuelve CAPTCHAs.
+2. **Filtrar** lo que trae el agente, en este orden, y descartar al que:
    - por el nombre es un centro, instituto, equipo, fundación, clínica o asociación,
-   - no tiene teléfono válido,
-   - ya está en la base (mismo número = misma persona),
-   - pidió la baja alguna vez,
-   - está inscripto en el **Registro No Llame** (Ley 26.951),
-   - no tiene WhatsApp.
-5. **Guardar** la ficha mínima, con el link exacto de dónde salió el dato.
-
-Google Places sigue como fuente extra solo si hay `GOOGLE_PLACES_KEY`.
+   - no tiene un celular válido,
+   - viene de una red social,
+   - pidió la baja (`data/bajas.json`),
+   - ya está en `data/prospectos.json` (mismo número = misma persona),
+   - **no figura en la página:** el código descarga la página y el celular tiene que estar escrito ahí. Así el agente no puede inventar números.
+3. **Guardar** la ficha mínima en **`data/prospectos.json`**, con el link exacto de dónde salió el dato.
+4. **Importar (worker):** cada 10 minutos el worker lee el `.json` y pasa a la base a los nuevos que no pidieron la baja, no están en el **Registro No Llame** (Ley 26.951) y **tienen WhatsApp**. Quedan como `encontrado`, listos para el Vendedor. También publica las bajas en `data/bajas.json` para que la Mac las borre del `.json`.
 
 ### Cuándo actúa
-Una vez por día, desde las **9:00** (`SEARCH_HOUR`). Lo despierta el Orquestador y corre **en segundo plano** (puede tardar más de una hora por las pausas), sin frenar las respuestas del Vendedor. Para forzar una corrida hoy: `docker compose exec worker npm run buscador`.
+- **Búsqueda:** cada hora en la Mac (`launchd`), o a mano con `npm run buscador`. Hasta **10 psicólogos nuevos por corrida**. Si una corrida sigue en curso, la siguiente no arranca.
+- **Importación:** cada 10 minutos, en el worker, en segundo plano (la despierta el Orquestador).
 
 ### Qué recibe
-- Las páginas de resultados y las páginas de psicólogos que abre el navegador.
+- Las páginas que abre el navegador.
 - Las consultas y las instrucciones de `content/`.
-- La lista del Registro No Llame (`data/no_llame.csv`) y la lista de bajas.
+- En la importación: la lista del Registro No Llame (`data/no_llame.csv`) y la lista de bajas.
 
 ### Qué entrega
-- Prospectos nuevos en estado **`encontrado`** con: nombre, WhatsApp, email (si hay), ciudad, fuente (`bing` / `google` / `duckduckgo` / `google_places`) y **link de la página** donde apareció (para responder "¿de dónde sacaste mi número?").
-- Un informe de la corrida (`buscador_run`): encontrados, guardados, motivos de descarte, búsquedas, páginas, consultas a WhatsApp, motor usado, si hubo CAPTCHA y por qué terminó.
+- **`data/prospectos.json`**: por cada psicólogo, nombre, celular, email (si hay), ciudad, provincia, **link de la página** donde apareció (para responder "¿de dónde sacaste mi número?") y fecha.
+- Prospectos nuevos en la base, en estado **`encontrado`** y con fuente `claude`.
+- Un resumen de cada corrida (`data/buscador-corridas.json`) y de cada importación (evento `buscador_import`), visibles en `/pipeline`.
 
 ### Con quién se comunica
-- **Orquestador:** lo despierta y lo frena al apagar el sistema.
-- **Gateway de WhatsApp:** le pregunta si un número tiene WhatsApp.
-- **Lauri:** le avisa por WhatsApp si un buscador le pidió CAPTCHA (una vez por corrida).
+- **Orquestador:** despierta la importación y la frena al apagar el sistema.
+- **Gateway de WhatsApp:** en la importación, le pregunta si un número tiene WhatsApp.
+- **Hub:** muestra el `.json` con el estado de cada psicólogo (pendiente, en la base, descartado).
 - **Vendedor:** indirectamente, porque le deja las fichas en la base.
 
 ### Qué decide
-Qué resultados abrir y quién de cada página es un psicólogo con celular.
+Qué buscar, qué resultados abrir y quién de cada página es un psicólogo con celular.
 
 ### Qué NO puede hacer
 - Escribirle a nadie.
-- Guardar a alguien sin chequear el Registro No Llame. **Si falta el archivo, no guarda a nadie.**
-- Inventar datos: nombre, celular y email salen textuales de la página.
+- Cargar a la base a alguien sin chequear el Registro No Llame. **Si falta el archivo, no carga a nadie.**
+- Inventar datos: el celular tiene que figurar en la página.
 - Resolver o esquivar CAPTCHAs, entrar a páginas con login o completar formularios.
 - Usar LinkedIn o redes sociales.
-- Pasarse de los topes: **50 prospectos** (`BUSCADOR_MAX_PER_DAY`), 25 búsquedas y 150 páginas por corrida, y **150 consultas a WhatsApp por día** (con una pausa de 2 a 6 s antes de cada una; un número sin WhatsApp no se vuelve a consultar en 60 días). Todos los topes se configuran en `.env`.
+- Pasarse de los topes: **10 nuevos por corrida** y **150 consultas a WhatsApp por día** (`BUSCADOR_MAX_WA_CHECKS`), con una pausa de 2 a 6 s antes de cada una. Un número sin WhatsApp no se vuelve a consultar en 60 días.
 
 ### Estado
-✅ Implementado (navegador, Bing con respaldo, ficha mínima, segundo plano).
-Pendiente: probar una corrida completa en el servidor con Docker, WhatsApp e IA reales.
+✅ Implementado y probado en la Mac (agente de Claude con navegador, `prospectos.json`, importación en el worker, sección en el hub).
+Pendiente: dejar el `launchd` instalado en la Mac y probar la importación con WhatsApp real.
 
 ---
 
@@ -272,7 +273,7 @@ Cada **60 segundos** hace una ronda ("tick") con estos pasos, en orden:
 |---|---|
 | `recuperar` | Después de un reinicio, encuentra mensajes que quedaron sin responder. |
 | `responder` | Despierta al Vendedor para los chats que esperaron sus 30 segundos. Fuera de horario, los pasa al inicio de la próxima ventana. |
-| `buscador` | Despierta al Buscador una vez por día. |
+| `importar` | Cada 10 minutos pasa los psicólogos nuevos de `data/prospectos.json` a la base. |
 | `freno` | Si hubo **3 bajas en 7 días**, **pausa los contactos nuevos** y avisa a Lauri. |
 | `nuevos_contactos` | Pide al Vendedor que abra un chat nuevo si: está en horario, no hay pausa, hoy van menos de 5 y pasaron 30 minutos desde el anterior. |
 | `seguimientos` | Despierta los seguimientos del Vendedor una vez por día. |
@@ -288,7 +289,7 @@ Todo el tiempo, una ronda por minuto. También recibe cada mensaje entrante (ví
 Mensajes entrantes y estado de la conexión de WhatsApp (del Gateway) y el estado guardado en la base (contadores, pausas, última corrida de cada tarea).
 
 ### Qué entrega
-Órdenes de trabajo para Buscador, Vendedor, Analista y Gateway, pausas de seguridad y avisos a Lauri.
+Órdenes de trabajo para la importación del Buscador, el Vendedor, el Analista y el Gateway, pausas de seguridad y avisos a Lauri.
 
 ### Con quién se comunica
 Con **todos**. Es el único que despierta a los demás.
@@ -336,7 +337,7 @@ Mensajes de WhatsApp (vía Baileys) y la cola de salida.
 Historial actualizado, aviso al Orquestador de que hay que responder, mensajes enviados y avisos a Lauri.
 
 ### Con quién se comunica
-Con **WhatsApp**, el **Orquestador**, el **Vendedor** (le recibe los mensajes por la cola), el **Buscador** (le responde si un número tiene WhatsApp) y **Lauri**.
+Con **WhatsApp**, el **Orquestador**, el **Vendedor** (le recibe los mensajes por la cola), la **importación del Buscador** (le responde si un número tiene WhatsApp) y **Lauri**.
 
 ### Qué NO puede hacer
 - Leer o escribir en chats que no son de prospectos.
@@ -394,17 +395,21 @@ flowchart LR
 
 ## 3. Cómo se comunican las piezas
 
-**Los agentes no se hablan entre sí. Todo pasa por la base de datos PostgreSQL**, que funciona como tablero compartido y cola de trabajo. El Orquestador decide a quién despertar.
+**Los agentes no se hablan entre sí. Todo pasa por la base de datos PostgreSQL**, que funciona como tablero compartido y cola de trabajo. El Orquestador decide a quién despertar. La única excepción es el Buscador: corre en la Mac y deja a los psicólogos en `data/prospectos.json`, y el worker los importa a la base.
 
 ```mermaid
 flowchart TB
   WA[WhatsApp de Lauri] <--> GW[Gateway]
   GW <--> DB[(PostgreSQL)]
-  OR[Orquestador] -->|despierta| BU[Buscador]
+  BU[Buscador en la Mac: Claude + navegador] --> JS[(data/prospectos.json)]
+  OR[Orquestador] -->|cada 10 min| IM[Importador]
+  JS --> IM
   OR -->|despierta| VE[Vendedor]
   OR -->|despierta| AN[Analista]
   OR -->|envía cola| GW
-  BU --> DB
+  IM --> DB
+  IM -->|bajas.json| BU
+  JS --> HUB
   VE <--> DB
   VE --> AG[Agenda] --> GC[Google Calendar / Gmail]
   AN <--> DB
@@ -415,12 +420,12 @@ flowchart TB
 
 | Tabla | Escribe | Lee | Para qué |
 |---|---|---|---|
-| `prospects` | Buscador, Vendedor, Gateway | Todos, hub | Ficha y **estado** de cada psicólogo. |
+| `prospects` | Importador del Buscador, Vendedor, Gateway | Todos, hub | Ficha y **estado** de cada psicólogo. |
 | `messages` | Gateway | Vendedor, hub, Analista | Historial de cada chat. |
 | `outbox` | Vendedor, Orquestador | Gateway | **Cola de salida.** Nada se envía directo. |
 | `escalations` | Vendedor, Gateway | Hub, Vendedor | Preguntas para Lauri y sus respuestas. |
 | `faq` | Vendedor | Vendedor | Respuestas de Lauri reutilizables. |
-| `opt_outs` | Vendedor | Buscador, Gateway | Números bloqueados para siempre. |
+| `opt_outs` | Vendedor | Importador, Gateway | Números bloqueados para siempre. |
 | `opener_variants`, `manual_versions`, `proposals` | Analista, hub | Vendedor, hub | Mejoras y versiones. |
 | `meetings` | Agenda | Hub | Reuniones agendadas. |
 | `events` | Todos | Hub | Bitácora de actividad y errores. |
@@ -463,19 +468,19 @@ Avisos: ❓ pregunta · ✅ listo para cerrar · ⚠️ sospecha de bot · 📅 
 |---|---|
 | `/` | Métricas, prospectos ordenados por urgencia y avisos. |
 | `/p/:id` | Chat completo, ficha, evaluación del agente y respuesta a escalaciones. |
-| `/pipeline` | El embudo y el movimiento entre estados. |
+| `/pipeline` | El embudo, el movimiento entre estados y los psicólogos de `data/prospectos.json`. |
 | `/mejoras` | Propuestas del Analista para aprobar o rechazar. |
 | `/sistema` | Conexión de WhatsApp (QR), cola de salida y errores. |
 
 ## 5. Reglas que no se rompen
 
 **Negocio:** no decir el precio · no inventar · no presionar · un chat traspasado nunca vuelve al agente · nada cambia sin la aprobación de Lauri.
-**Legales:** Registro No Llame (Ley 26.951) antes de guardar a nadie · baja = datos borrados y número bloqueado (Ley 25.326) · inscribir la base ante la AAIP (pendiente de Lauri).
+**Legales:** Registro No Llame (Ley 26.951) antes de cargar a nadie a la base · baja = datos borrados (también de `prospectos.json`) y número bloqueado (Ley 25.326) · inscribir la base ante la AAIP (pendiente de Lauri).
 **WhatsApp personal:** el riesgo de bloqueo lo asume Lauri. Se mitiga con 5 contactos nuevos por día espaciados, horario laboral, freno por bajas y lista blanca.
 
-**IA:** los modelos son gratuitos por ahora (Gemini y Groq), con respaldo en cadena por agente. Para pasar a modelos pagos se edita `.env`, sin tocar código. Si fallan todos, la respuesta espera; nunca se manda un mensaje roto.
+**IA:** el Buscador usa Claude Code con la sesión de Lauri (sin claves). El Vendedor y el Analista usan modelos gratuitos por ahora (Gemini y Groq), con respaldo en cadena. Para pasar a modelos pagos se edita `.env`, sin tocar código. Si fallan todos, la respuesta espera; nunca se manda un mensaje roto.
 
-**Infraestructura:** Docker Compose en un servidor Linux con `db` (PostgreSQL), `worker` (agentes + WhatsApp), `hub` (web) y, opcional, Cloudflare Tunnel para acceso 24/7.
+**Infraestructura:** Docker Compose con `db` (PostgreSQL), `worker` (agentes + WhatsApp), `hub` (web) y, opcional, Cloudflare Tunnel para acceso 24/7. El Buscador corre fuera de Docker, en la Mac, y comparte la carpeta `data/`.
 
 ## 6. La cuenta del embudo (estimación)
 

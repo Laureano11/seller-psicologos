@@ -19,16 +19,16 @@ cp .env.example .env
 | `HUB_USER` | Usuario para entrar al hub (solo se usa si hay contraseña). |
 | `HUB_PASSWORD` | **Opcional.** Vacía = el hub no pide contraseña: sirve en tu computadora, porque solo escucha en `127.0.0.1`. **Antes de publicarlo en internet (paso 7) es obligatorio poner una**, de mínimo 10 caracteres. Generá una con `openssl rand -base64 18`. |
 
-## 2. Modelos de IA (gratis)
+## 2. Modelos de IA del Vendedor y el Analista (gratis)
 
-Necesitás al menos una de las dos claves; lo ideal son las dos, para tener respaldo.
+Necesitás al menos una de las dos claves; lo ideal son las dos, para tener respaldo. **El Buscador no las usa** (ver §3).
 
 | Variable | Dónde se saca |
 |---|---|
 | `GOOGLE_GENERATIVE_AI_API_KEY` | https://aistudio.google.com/apikey → "Create API key" (Gemini, plan gratuito). |
 | `GROQ_API_KEY` | https://console.groq.com/keys → "Create API Key" (gratuito). |
 
-Para elegir qué modelo usa cada agente están `LLM_BUSCADOR`, `LLM_VENDEDOR` y `LLM_ANALISTA`.
+Para elegir qué modelo usa cada agente están `LLM_VENDEDOR` y `LLM_ANALISTA`.
 El formato es una lista `proveedor:modelo` separada por comas; el orden es el orden de respaldo.
 
 **Para pasar a modelos pagos más adelante:**
@@ -37,21 +37,20 @@ El formato es una lista `proveedor:modelo` separada por comas; el orden es el or
 
 No hay que tocar código.
 
-## 3. Buscador: navegador y Google Places
+## 3. Buscador (en tu Mac, sin claves)
 
-El Buscador busca psicólogos con un **Chromium sin pantalla** dentro del contenedor `worker`, con un perfil propio (volumen `browser_profile`). No hace falta configurar nada: viene listo en la imagen de Docker. El motor principal es **Bing** (`BUSCADOR_ENGINE`), porque Google y DuckDuckGo le piden CAPTCHA al navegador automatizado.
+El Buscador **no necesita ninguna clave ni variable**. Corre en tu Mac, fuera de Docker: lanza un agente de Claude (`claude -p`, con tu sesión de Claude Code) que busca psicólogos con un navegador propio (perfil `browser_profile/`, nunca tu Chrome personal) y los guarda en `data/prospectos.json`.
 
-Qué busca y cómo extrae los datos se edita en dos archivos de texto (ver §6): `content/buscador-consultas.md` y `content/buscador-instrucciones.md`. La guía completa del agente está en [`src/agents/buscador/README.md`](src/agents/buscador/README.md).
+Lo único que necesitás:
+1. Node 24 y `npm install` (una vez).
+2. Google Chrome instalado.
+3. Claude Code instalado y logueado: corré `claude` una vez en la terminal y entrá con tu cuenta.
 
-**Google Places es opcional:** si cargás una clave, se suma como fuente extra.
+Después:
+- A mano: `npm run buscador` (hasta 10 nuevos por corrida; `npm run buscador -- 20` para otro máximo).
+- Cada hora, solo: instalá el `launchd` como explica [`src/agents/buscador/README.md`](src/agents/buscador/README.md).
 
-
-1. Entrá a https://console.cloud.google.com, creá un proyecto (o usá uno existente) y activá la facturación. Google da un crédito mensual gratuito que alcanza de sobra para ~50 búsquedas por día.
-2. En "APIs y servicios" → "Biblioteca", activá **Places API (New)**.
-3. En "Credenciales" → "Crear credenciales" → "Clave de API". Restringila a Places API.
-4. Pegala en `GOOGLE_PLACES_KEY`.
-
-Sin esta clave, el Buscador usa solo el navegador.
+El worker lee `data/prospectos.json` cada 10 minutos y carga a la base a los que tienen WhatsApp y no están en el No Llame ni dados de baja. Qué busca y cómo se edita en dos archivos de texto (ver §6): `content/buscador-consultas.md` y `content/buscador-instrucciones.md`.
 
 ## 4. Google Calendar + Gmail (Agenda)
 
@@ -93,10 +92,10 @@ Hoy son plantillas. Reemplazalas con tu contenido real:
 | `content/manual-ventas.md` | Tus métodos y patrones de venta. |
 | `content/estilo.md` | Tu forma de escribir, explicada en detalle, con ejemplos de mensajes reales tuyos. |
 | `content/apertura.md` | El primer mensaje que se manda a cada psicólogo. |
-| `content/buscador-consultas.md` | Qué escribe el Buscador en el buscador web, una consulta por línea, con `{ciudad}` y `{provincia}`. |
-| `content/buscador-instrucciones.md` | Las instrucciones que la IA del Buscador sigue para sacar nombre, celular y email de cada página. |
+| `content/buscador-consultas.md` | Qué escribe el agente del Buscador en el buscador web, una consulta por línea, con `{ciudad}` y `{provincia}`. |
+| `content/buscador-instrucciones.md` | Las instrucciones que sigue el agente de Claude para buscar y anotar nombre, celular y email. |
 
-Los cambios en los cuatro primeros se toman al reiniciar el worker: `docker compose restart worker`. Los dos del Buscador se releen en cada búsqueda, sin reiniciar.
+Los cambios en los cuatro primeros se toman al reiniciar el worker: `docker compose restart worker`. Los dos del Buscador se releen en cada corrida, sin reiniciar.
 
 ## 7. Elegir el servidor y dejar el hub online 24/7
 
@@ -111,6 +110,8 @@ cd seller-psicologos
 # copiá tu .env y data/no_llame.csv (por ejemplo con scp)
 docker compose up -d --build db worker hub
 ```
+
+El Buscador no va en el servidor: corre en tu Mac (§3). Si el worker está en otro equipo, copiá `data/prospectos.json` a la carpeta `data/` del servidor (por ejemplo con `rsync` cada hora) y traé de vuelta `data/bajas.json`.
 
 ### Hub accesible desde internet (Cloudflare Tunnel, gratis)
 
@@ -138,15 +139,7 @@ Recordá que usar WhatsApp personal con automatización va contra los términos 
 | `SEND_WINDOW` | `mon-fri 09:00-20:00` | Horario en que se mandan mensajes. |
 | `MEETING_WINDOW` | `mon-fri 10:00-18:00` | Horario en que se ofrecen reuniones. |
 | `MEETING_MINUTES` | 30 | Duración de cada reunión. |
-| `SEARCH_HOUR` | 9 | Hora en que corre el buscador. |
-| `BUSCADOR_MAX_PER_DAY` | 50 | Máximo de prospectos nuevos por día. |
-| `BUSCADOR_MAX_SEARCHES` | 25 | Búsquedas en el buscador web por corrida. |
-| `BUSCADOR_MAX_PAGES` | 150 | Páginas abiertas por corrida. |
-| `BUSCADOR_RESULTS_PER_QUERY` | 10 | Resultados que abre de cada búsqueda. |
-| `BUSCADOR_MAX_WA_CHECKS` | 150 | Consultas a WhatsApp ("¿tiene WhatsApp?") por día. Protege tu número. |
-| `BUSCADOR_SEARCH_DELAY` | 20-60 | Pausa aleatoria entre búsquedas, en segundos. |
-| `BUSCADOR_PAGE_DELAY` | 3-8 | Pausa aleatoria entre páginas, en segundos. |
-| `BUSCADOR_ENGINE` | bing | Motor principal: `bing`, `google` o `duckduckgo`. Los otros quedan de respaldo. |
+| `BUSCADOR_MAX_WA_CHECKS` | 150 | Consultas a WhatsApp ("¿tiene WhatsApp?") por día al importar `data/prospectos.json`. Protege tu número. |
 | `FOLLOWUP_DAYS` / `MAX_FOLLOWUPS` | 3 / 1 | Cuándo y cuántas veces se hace seguimiento si no responden. |
 | `CLOSE_AFTER_DAYS` | 4 | Días sin respuesta tras el seguimiento antes de marcar "sin respuesta". |
 | `AB_MIN_PER_VARIANT` | 30 | Contactos mínimos por variante antes de proponer un cambio A/B. |
@@ -154,9 +147,9 @@ Recordá que usar WhatsApp personal con automatización va contra los términos 
 
 ## Checklist final
 
-- [ ] `.env` con `OWNER_WA_ID` y al menos una clave de IA
+- [ ] `.env` con `OWNER_WA_ID` y al menos una clave de IA (para el Vendedor y el Analista)
 - [ ] `HUB_PASSWORD` fuerte antes de publicar el hub en internet
-- [ ] `GOOGLE_PLACES_KEY` (opcional)
+- [ ] Claude Code logueado en la Mac + `npm run buscador` (y el `launchd` para que corra cada hora)
 - [ ] OAuth de Google + `npm run google:auth` → `GOOGLE_REFRESH_TOKEN`
 - [ ] `data/no_llame.csv` + `DNC_MODE=file`
 - [ ] `content/*.md` con tu contenido real

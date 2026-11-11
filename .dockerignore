@@ -6,3 +6,5 @@ dist
 wa_auth
 docs
 tests
+browser_profile
+data
