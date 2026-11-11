@@ -7,3 +7,4 @@ data/*
 !data/.gitkeep
 browser_profile/
 browser_profile_prueba/
+.playwright-mcp/

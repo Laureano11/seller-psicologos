@@ -8,3 +8,4 @@ docs
 tests
 browser_profile
 data
+.playwright-mcp
