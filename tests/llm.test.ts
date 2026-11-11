@@ -8,7 +8,7 @@ import type { Db } from '../src/db/db.js';
 import type { Config } from '../src/config.js';
 
 const cfg = (llm: Partial<Config['llm']>) =>
-  ({ llm: { buscador: [], vendedor: [], analista: [], ...llm } }) as Config;
+  ({ llm: { vendedor: [], analista: [], ...llm } }) as Config;
 
 const okModel = (text: string) =>
   new MockLanguageModelV4({

@@ -1,11 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { z } from 'zod';
-import { AllProvidersFailedError, type Llm } from '../../llm/llm.js';
-import type { PageSnapshot } from './browser.js';
 import { toWaId } from '../../phone.js';
-
-export type Contact = { name: string; phone: string; email?: string };
 
 /** Respaldo si falta content/buscador-consultas.md (mismo contenido que ese archivo). */
 export const DEFAULT_QUERIES = [
@@ -17,33 +12,54 @@ export const DEFAULT_QUERIES = [
 ];
 
 /** Respaldo si falta content/buscador-instrucciones.md. */
-export const DEFAULT_INSTRUCTIONS = `Te paso el texto de una página web de Argentina y sus links de contacto.
-Devolvé la lista de psicólogos y psicólogas individuales que aparecen, con "name", "phone" y "email" (solo si aparece).
+export const DEFAULT_INSTRUCTIONS = `Sos el Buscador. Con el navegador, buscá psicólogos y psicólogas individuales de Argentina
+y devolvé su nombre, su celular y su email (solo si aparece), con el link de la página donde figura el celular.
 Ignorá centros, institutos, clínicas, fundaciones, asociaciones y equipos. Copiá los datos textuales: no inventes ni completes.
-Si una persona no tiene teléfono en la página, no la incluyas. Si no hay ninguno, devolvé una lista vacía.`;
+No entres a redes sociales, no completes formularios, no hagas login y no resuelvas CAPTCHAs.`;
 
-const MAX_CHARS = 12_000;
 const TEAM_WORDS = ['centro', 'instituto', 'equipo', 'fundacion', 'clinica', 'asociacion'];
 const PHONE_RUN = /\+?\d[\d\s().-]{6,}\d/g;
 
-const fold = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-const digits = (s: string) => s.replace(/\D/g, '');
-const isContactLink = (href: string) => /^(tel:|mailto:)/i.test(href) || /(wa\.me\/|api\.whatsapp\.com\/send)/i.test(href);
+/** Dominios que el Buscador nunca usa como fuente (redes sociales; LinkedIn descartado por decisión de Lauri). */
+export const BLACKLIST = ['linkedin.com', 'facebook.com', 'instagram.com', 'x.com', 'twitter.com', 'tiktok.com', 'youtube.com'];
 
-/** Tramos de dígitos con forma de teléfono (8+ dígitos) en el texto y en los links de contacto. */
-function phoneRuns(s: PageSnapshot): string[] {
-  const runs = (s.text.match(PHONE_RUN) ?? []).map(digits);
-  for (const { href } of s.links) if (isContactLink(href)) runs.push(digits(href));
-  return runs.filter((r) => r.length >= 8);
+const fold = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+function hostOf(url: string): string | null {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.hostname.toLowerCase() : null;
+  } catch {
+    return null;
+  }
 }
 
-export function hasPhoneHint(s: PageSnapshot): boolean {
-  return phoneRuns(s).length > 0;
+/** URL inválida, no http(s) o de una red social. */
+export function isBlacklisted(url: string): boolean {
+  const host = hostOf(url);
+  return !host || BLACKLIST.some((d) => host === d || host.endsWith(`.${d}`));
 }
 
 export function looksLikeTeam(name: string): boolean {
   const words = fold(name).split(/[^a-z]+/);
   return TEAM_WORDS.some((w) => words.includes(w));
+}
+
+/**
+ * ¿El celular figura escrito en la página (texto o HTML, incluidos links tel: / wa.me)?
+ * Compara números normalizados: tolera "15" / "+54 9" pero no una característica inventada.
+ */
+export function phoneInText(text: string, phone: string): boolean {
+  const id = toWaId(phone);
+  if (!id) return false;
+  // celular argentino: los 10 dígitos (área + número) o con el "15" después del área, dentro de un tramo de dígitos
+  // (un tramo puede juntar varios números separados por espacios)
+  const national = id.startsWith('549') ? id.slice(3) : null;
+  const forms = national ? [national, ...[2, 3, 4].map((a) => national.slice(0, a) + '15' + national.slice(a))] : [];
+  return (text.match(PHONE_RUN) ?? []).some((run) => {
+    const d = run.replace(/\D/g, '');
+    return toWaId(run) === id || forms.some((f) => d.includes(f));
+  });
 }
 
 function readContent(contentDir: string, file: string): string | null {
@@ -71,35 +87,4 @@ export function loadQueries(contentDir: string): string[] {
 
 export function fillQuery(tpl: string, q: { city: string; province: string }): string {
   return tpl.replaceAll('{ciudad}', q.city).replaceAll('{provincia}', q.province);
-}
-
-const schema = z.object({
-  contacts: z.array(z.object({ name: z.string(), phone: z.string(), email: z.string().optional() })),
-});
-
-/** Pide a la IA los psicólogos de la página. Descarta celulares que no aparecen en la página (anti-invención). */
-export async function extractContacts(s: PageSnapshot, deps: { llm: Llm; instructions: string }): Promise<Contact[]> {
-  const contactLinks = s.links.map((l) => l.href).filter(isContactLink);
-  const header = `Página: ${s.url}\nLinks de contacto:\n${contactLinks.join('\n') || '(ninguno)'}\n\nTexto:\n`;
-  const content = (header + s.text).slice(0, MAX_CHARS);
-  let out: z.infer<typeof schema>;
-  try {
-    out = await deps.llm.object({ agent: 'buscador', system: deps.instructions, messages: [{ role: 'user', content }], schema });
-  } catch (e) {
-    if (e instanceof AllProvidersFailedError) throw e;
-    return [];
-  }
-  // el número de la IA tiene que ser el mismo (normalizado) que alguno escrito en la página:
-  // tolera "15" / "+54 9" pero no una característica inventada
-  const pageIds = new Set(phoneRuns(s).map(toWaId).filter((id): id is string => id !== null));
-  const inPage = (phone: string) => {
-    const id = toWaId(phone);
-    return id !== null && pageIds.has(id);
-  };
-  return out.contacts
-    .filter((c) => c.name.trim() && inPage(c.phone))
-    .map((c) => {
-      const email = c.email?.trim();
-      return email ? { name: c.name.trim(), phone: c.phone.trim(), email } : { name: c.name.trim(), phone: c.phone.trim() };
-    });
 }

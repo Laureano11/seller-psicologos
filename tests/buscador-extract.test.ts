@@ -2,21 +2,40 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createFakeLlm, AllProvidersFailedError } from '../src/llm/llm.js';
-import type { PageSnapshot } from '../src/agents/buscador/browser.js';
 import {
-  hasPhoneHint, looksLikeTeam, loadQueries, loadInstructions, fillQuery, extractContacts, DEFAULT_QUERIES, DEFAULT_INSTRUCTIONS,
+  phoneInText, isBlacklisted, looksLikeTeam, loadQueries, loadInstructions, fillQuery, DEFAULT_QUERIES, DEFAULT_INSTRUCTIONS,
 } from '../src/agents/buscador/extract.js';
 
-const snap = (text: string, hrefs: string[] = []): PageSnapshot => ({ url: 'https://a.com', text, links: hrefs.map((href) => ({ href, text: '' })) });
+describe('phoneInText', () => {
+  it('encuentra el número en texto y en links tel: / wa.me del HTML', () => {
+    expect(phoneInText('Tel: 351 15-612-3456', '3516123456')).toBe(true);
+    expect(phoneInText('<a href="tel:+543516123456">Llamar</a>', '351 612 3456')).toBe(true);
+    expect(phoneInText('<a href="https://wa.me/5493516123456">', '+54 9 351 612-3456')).toBe(true);
+    expect(phoneInText('<a href="https://api.whatsapp.com/send?phone=5493516123456">', '3516123456')).toBe(true);
+  });
+  it('encuentra un número aunque esté pegado a otros', () => {
+    expect(phoneInText('Tel 351 612 3456  351 111 1111', '3511111111')).toBe(true);
+    expect(phoneInText('3516123456 3511111111', '3516123456')).toBe(true);
+  });
+  it('acepta el mismo número con o sin 15 / +54 9', () => {
+    expect(phoneInText('Ana 351 15-612-3456 / Bea 011 15 2222-3333', '+54 9 11 2222-3333')).toBe(true);
+  });
+  it('rechaza un número que no está o con la característica inventada', () => {
+    expect(phoneInText('Lic. Real tel 351-612-3456', '351 999-8888')).toBe(false);
+    expect(phoneInText('Lic. Ana cel 15 612-3456', '351 612 3456')).toBe(false);
+    expect(phoneInText('3516123456', 'no es un número')).toBe(false);
+  });
+});
 
-describe('hasPhoneHint', () => {
-  it('detecta teléfonos en texto y links', () => {
-    expect(hasPhoneHint(snap('Tel: 351 15-612-3456'))).toBe(true);
-    expect(hasPhoneHint(snap('Contacto', ['tel:+543516123456']))).toBe(true);
-    expect(hasPhoneHint(snap('Escribime', ['https://wa.me/5493516123456']))).toBe(true);
-    expect(hasPhoneHint(snap('Escribime', ['https://api.whatsapp.com/send?phone=5493516123456']))).toBe(true);
-    expect(hasPhoneHint(snap('Atiendo de 9 a 18 hs, año 2024, cp 5000'))).toBe(false);
+describe('isBlacklisted', () => {
+  it('redes sociales y URLs inválidas', () => {
+    expect(isBlacklisted('https://ar.linkedin.com/in/x')).toBe(true);
+    expect(isBlacklisted('https://www.instagram.com/ana')).toBe(true);
+    expect(isBlacklisted('https://m.facebook.com/ana')).toBe(true);
+    expect(isBlacklisted('https://x.com/ana')).toBe(true);
+    expect(isBlacklisted('https://ana-psicologa.com')).toBe(false);
+    expect(isBlacklisted('https://box.com')).toBe(false);
+    expect(isBlacklisted('no es url')).toBe(true);
   });
 });
 
@@ -54,53 +73,5 @@ describe('archivos editables', () => {
   });
   it('fillQuery', () => {
     expect(fillQuery('psicólogo {ciudad} {provincia}', { city: 'Rosario', province: 'Santa Fe' })).toBe('psicólogo Rosario Santa Fe');
-  });
-});
-
-describe('extractContacts', () => {
-  it('manda texto + links de contacto a la IA, recortado, con agente buscador y las instrucciones', async () => {
-    let seen: { agent: string; system: string; content: string } | undefined;
-    const llm = createFakeLlm((a) => {
-      seen = { agent: a.agent, system: a.system, content: a.messages[0]!.content };
-      return { contacts: [] };
-    });
-    const long = 'x'.repeat(20_000);
-    await extractContacts(snap(`Lic. Ana ${long}`, ['tel:+543511111111', 'https://wa.me/5493512222222', 'mailto:ana@a.com', 'https://otra.com']), { llm, instructions: 'INSTR' });
-    expect(seen!.agent).toBe('buscador');
-    expect(seen!.system).toBe('INSTR');
-    expect(seen!.content.length).toBeLessThanOrEqual(12_000);
-    expect(seen!.content).toContain('tel:+543511111111');
-    expect(seen!.content).toContain('https://wa.me/5493512222222');
-    expect(seen!.content).toContain('mailto:ana@a.com');
-    expect(seen!.content).not.toContain('https://otra.com');
-  });
-  it('devuelve los contactos de la IA', async () => {
-    const llm = createFakeLlm(() => ({ contacts: [{ name: 'Lic. Ana Gómez', phone: '351 15 612-3456', email: 'ana@a.com' }, { name: 'Lic. Bea', phone: '+54 9 11 2222-3333' }] }));
-    const out = await extractContacts(snap('Lic. Ana Gómez 351 15 612-3456 ana@a.com', ['https://wa.me/5491122223333']), { llm, instructions: 'I' });
-    expect(out).toEqual([{ name: 'Lic. Ana Gómez', phone: '351 15 612-3456', email: 'ana@a.com' }, { name: 'Lic. Bea', phone: '+54 9 11 2222-3333' }]);
-  });
-  it('extractContacts descarta un celular que no aparece en la página', async () => {
-    const llm = createFakeLlm(() => ({ contacts: [{ name: 'Lic. Inventada', phone: '351 999-8888' }, { name: 'Lic. Real', phone: '3516123456' }] }));
-    const out = await extractContacts(snap('Lic. Real tel 351-612-3456'), { llm, instructions: 'I' });
-    expect(out.map((c) => c.name)).toEqual(['Lic. Real']);
-  });
-  it('descarta un número al que la IA le inventó la característica', async () => {
-    const llm = createFakeLlm(() => ({ contacts: [{ name: 'Lic. Ana', phone: '351 612 3456' }] }));
-    expect(await extractContacts(snap('Lic. Ana cel 15 612-3456'), { llm, instructions: 'I' })).toEqual([]);
-  });
-  it('acepta el mismo número escrito con o sin 15 / +54 9', async () => {
-    const llm = createFakeLlm(() => ({ contacts: [{ name: 'Lic. Ana', phone: '3516123456' }, { name: 'Lic. Bea', phone: '+54 9 11 2222-3333' }] }));
-    const out = await extractContacts(snap('Ana 351 15-612-3456 / Bea 011 15 2222-3333'), { llm, instructions: 'I' });
-    expect(out.map((c) => c.name)).toEqual(['Lic. Ana', 'Lic. Bea']);
-  });
-  it('email vacío se omite', async () => {
-    const llm = createFakeLlm(() => ({ contacts: [{ name: 'Lic. Real', phone: '3516123456', email: '' }] }));
-    expect(await extractContacts(snap('3516123456'), { llm, instructions: 'I' })).toEqual([{ name: 'Lic. Real', phone: '3516123456' }]);
-  });
-  it('deja pasar AllProvidersFailedError; otro error -> []', async () => {
-    const down = createFakeLlm(() => { throw new AllProvidersFailedError('sin modelos', []); });
-    await expect(extractContacts(snap('3516123456'), { llm: down, instructions: 'I' })).rejects.toBeInstanceOf(AllProvidersFailedError);
-    const weird = createFakeLlm(() => ({ nada: true }));
-    expect(await extractContacts(snap('3516123456'), { llm: weird, instructions: 'I' })).toEqual([]);
   });
 });

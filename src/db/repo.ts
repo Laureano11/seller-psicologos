@@ -306,6 +306,10 @@ export async function isOptedOut(db: Db, waId: string): Promise<boolean> {
   return (await db.query('SELECT 1 FROM opt_outs WHERE wa_id=$1', [waId])).length > 0;
 }
 
+export async function listOptOutWaIds(db: Db): Promise<string[]> {
+  return (await db.query<{ wa_id: string }>('SELECT wa_id FROM opt_outs ORDER BY wa_id')).map((r) => r.wa_id);
+}
+
 export async function applyOptOut(db: Db, prospectId: number, reason: string): Promise<void> {
   const p = await getProspect(db, prospectId);
   if (!p) return;

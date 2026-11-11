@@ -5,11 +5,7 @@ import { createBaileysTransport } from './whatsapp/baileys.js';
 import { WaGateway } from './whatsapp/gateway.js';
 import { createLlm } from './llm/llm.js';
 import { createDncChecker, reportDncStatus } from './dnc.js';
-import { createGooglePlacesSource, type ProspectSource } from './agents/buscador/sources.js';
-import { runBuscador } from './agents/buscador/run.js';
-import { launchBrowser } from './agents/buscador/browser.js';
-import { engineOrder } from './agents/buscador/engines.js';
-import { createRobotsChecker } from './agents/buscador/robots.js';
+import { runImportador } from './agents/buscador/importar.js';
 import { createGoogleServices } from './agents/agenda/google.js';
 import { createVendedor } from './agents/vendedor/vendedor.js';
 import { runWeeklyAnalysis } from './learning/analysis.js';
@@ -27,21 +23,14 @@ async function main() {
   const dnc = createDncChecker(config);
   // si falta el archivo No Llame no se cae (evita el reinicio en bucle): evento + banner en el hub
   if (!(await reportDncStatus(db, dnc))) console.error(`[worker] falta el archivo No Llame: ${config.dncFile}`);
-  const sources: ProspectSource[] = config.googlePlacesKey ? [createGooglePlacesSource(config.googlePlacesKey)] : [];
   const google = config.google ? createGoogleServices(config.google) : undefined;
   const vendedor = createVendedor({ db, llm, gateway, calendar: google?.calendar, mail: google?.mail, config });
 
-  const buscadorDeps = {
-    db, llm, dnc, sources, wa: transport, config, contentDir: config.contentDir,
-    openBrowser: () => launchBrowser({ profileDir: config.buscador.profileDir, tz: config.tz }),
-    engines: engineOrder(config.buscador.engine),
-    robots: createRobotsChecker(),
-    notifyOwner: (t: string) => gateway.enqueueToOwner(t),
-  };
+  const importDeps = { db, dnc, wa: transport, config, dataDir: config.dataDir };
 
   const orch = createOrchestrator({
     db, config, gateway, vendedor,
-    runBuscador: (now, signal) => runBuscador(buscadorDeps, now, signal),
+    runImportador: (now, signal) => runImportador(importDeps, now, signal),
     runWeeklyAnalysis: (now) => runWeeklyAnalysis({ db, llm, config }, now),
   });
 
@@ -64,8 +53,8 @@ async function main() {
     clearInterval(timer);
     orch.stop();
     await orch.idle();
-    // la corrida del Buscador se corta en su próxima pausa o página; se le dan hasta 8 s para cerrar y guardar el cursor
-    await Promise.race([orch.idleBuscador(), new Promise((r) => setTimeout(r, 8_000))]);
+    // la importación se corta en su próxima pausa; se le dan hasta 8 s para cerrar y guardar sus contadores
+    await Promise.race([orch.idleImportador(), new Promise((r) => setTimeout(r, 8_000))]);
     await transport.stop?.().catch(() => {});
     await db.close().catch(() => {});
     process.exit(0);
@@ -74,7 +63,7 @@ async function main() {
   process.on('SIGINT', shutdown);
 
   console.log(
-    `[worker] iniciado: tz=${config.tz} buscador=${sources.length ? 'navegador+places' : 'navegador'} google=${google ? 'si' : 'no'} dnc=${config.dncMode}`,
+    `[worker] iniciado: tz=${config.tz} datos=${config.dataDir} google=${google ? 'si' : 'no'} dnc=${config.dncMode}`,
   );
 }
 

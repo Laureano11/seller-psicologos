@@ -4,14 +4,13 @@ import * as repo from '../src/db/repo.js';
 import { WaGateway } from '../src/whatsapp/gateway.js';
 import { createFakeTransport, type FakeTransport, type IncomingMsg } from '../src/whatsapp/transport.js';
 import { createOrchestrator } from '../src/orchestrator/orchestrator.js';
-import { forceBuscadorToday } from '../src/agents/buscador/run.js';
 import { parseWindow } from '../src/time.js';
 import type { Config } from '../src/config.js';
 
 const OWNER = '5491100000000';
 const config = {
   sendWindow: parseWindow('mon-fri 09:00-20:00'), tz: 'America/Argentina/Buenos_Aires', ownerWaId: OWNER,
-  dailyNewContacts: 5, searchHour: 9, replyDebounceSeconds: 30,
+  dailyNewContacts: 5, replyDebounceSeconds: 30,
 } as Config;
 // hora Argentina = UTC-3. 2026-11-06 viernes, 11-08 domingo, 11-09 lunes.
 const FRI_NOON = new Date('2026-11-06T15:00:00Z');
@@ -24,7 +23,7 @@ let db: Db;
 let tr: FakeTransport;
 let gw: WaGateway;
 let vendedor: { handleInbound: ReturnType<typeof vi.fn>; startConversation: ReturnType<typeof vi.fn>; runFollowups: ReturnType<typeof vi.fn> };
-let runBuscador: Mock<(now: Date, signal: AbortSignal) => Promise<unknown>>;
+let runImportador: Mock<(now: Date, signal: AbortSignal) => Promise<unknown>>;
 let runWeeklyAnalysis: Mock<(now: Date) => Promise<unknown>>;
 let orch: ReturnType<typeof createOrchestrator>;
 
@@ -46,15 +45,15 @@ beforeEach(async () => {
     }),
     runFollowups: vi.fn(async () => 0),
   };
-  runBuscador = vi.fn(async () => ({}));
+  runImportador = vi.fn(async () => ({}));
   runWeeklyAnalysis = vi.fn(async () => ({}));
-  orch = createOrchestrator({ db, config, gateway: gw, vendedor: vendedor as any, runBuscador, runWeeklyAnalysis });
+  orch = createOrchestrator({ db, config, gateway: gw, vendedor: vendedor as any, runImportador, runWeeklyAnalysis });
 });
 
 afterEach(async () => { await db.close(); });
 
-/** Tick + espera a que termine la corrida del Buscador lanzada en segundo plano. */
-const tickWait = async (t: Date) => { await orch.tick(t); await orch.idleBuscador(); };
+/** Tick + espera a que termine la importación lanzada en segundo plano. */
+const tickWait = async (t: Date) => { await orch.tick(t); await orch.idleImportador(); };
 
 describe('debounce', () => {
   it('tres mensajes seguidos -> una sola respuesta tras la pausa', async () => {
@@ -80,75 +79,56 @@ describe('debounce', () => {
 });
 
 describe('tick', () => {
-  it('buscador: una vez por día', async () => {
-    await orch.tick(MON_905);
-    await orch.tick(plus(MON_905, MIN));
-    expect(runBuscador).toHaveBeenCalledTimes(1);
+  it('importar: al primer tick y de nuevo recién a los 10 minutos', async () => {
+    await tickWait(MON_905);
+    await tickWait(plus(MON_905, MIN));
+    await tickWait(plus(MON_905, 9 * MIN));
+    expect(runImportador).toHaveBeenCalledTimes(1);
+    await tickWait(plus(MON_905, 10 * MIN));
+    expect(runImportador).toHaveBeenCalledTimes(2);
   });
 
-  it('buscador corre en segundo plano: el tick termina aunque runBuscador no haya resuelto', async () => {
+  it('importar corre en segundo plano: el tick termina aunque no haya resuelto', async () => {
     let release!: () => void;
-    runBuscador.mockImplementation(() => new Promise<void>((r) => { release = r; }));
+    runImportador.mockImplementation(() => new Promise<void>((r) => { release = r; }));
     const flush = vi.spyOn(gw, 'flushOutbox');
     await orch.tick(MON_905);
-    expect(runBuscador).toHaveBeenCalledTimes(1);
-    expect(flush).toHaveBeenCalledTimes(1); // el tick llegó al final sin esperar al Buscador
-    expect(await repo.kvGet(db, 'buscador_last_date')).toBeFalsy();
+    expect(runImportador).toHaveBeenCalledTimes(1);
+    expect(flush).toHaveBeenCalledTimes(1); // el tick llegó al final sin esperar la importación
     release();
-    await orch.idleBuscador();
+    await orch.idleImportador();
   });
-  it('no lanza una segunda corrida mientras hay una en curso', async () => {
+  it('no lanza una segunda importación mientras hay una en curso', async () => {
     let release!: () => void;
-    runBuscador.mockImplementation(() => new Promise<void>((r) => { release = r; }));
+    runImportador.mockImplementation(() => new Promise<void>((r) => { release = r; }));
     await orch.tick(MON_905);
-    await orch.tick(plus(MON_905, MIN));
-    await orch.tick(plus(MON_905, 2 * MIN));
-    expect(runBuscador).toHaveBeenCalledTimes(1);
+    await orch.tick(plus(MON_905, 11 * MIN));
+    await orch.tick(plus(MON_905, 22 * MIN));
+    expect(runImportador).toHaveBeenCalledTimes(1);
     release();
-    await orch.idleBuscador();
+    await orch.idleImportador();
   });
-  it('al resolver, marca buscador_last_date = hoy', async () => {
-    await tickWait(MON_905);
-    expect(await repo.kvGet(db, 'buscador_last_date')).toBe('2026-11-09');
-  });
-  it('una corrida que falla tarde: el backoff cuenta desde la falla, no desde el inicio', async () => {
+  it('una importación que falla: se reintenta a los 30 minutos de la falla', async () => {
     let fail!: (e: Error) => void;
-    runBuscador.mockImplementation(() => new Promise((_r, rej) => { fail = rej; }));
+    runImportador.mockImplementation(() => new Promise((_r, rej) => { fail = rej; }));
     await orch.tick(MON_905);
-    await orch.tick(plus(MON_905, 50 * MIN)); // sigue corriendo
+    await orch.tick(plus(MON_905, 5 * MIN)); // sigue corriendo
     fail(new Error('db caída'));
-    await orch.idleBuscador();
-    await tickWait(plus(MON_905, 51 * MIN));
-    expect(runBuscador).toHaveBeenCalledTimes(1);
-    runBuscador.mockResolvedValue({});
-    await tickWait(plus(MON_905, 81 * MIN));
-    expect(runBuscador).toHaveBeenCalledTimes(2);
+    await orch.idleImportador();
+    await tickWait(plus(MON_905, 20 * MIN));
+    expect(runImportador).toHaveBeenCalledTimes(1);
+    runImportador.mockResolvedValue({});
+    await tickWait(plus(MON_905, 36 * MIN));
+    expect(runImportador).toHaveBeenCalledTimes(2);
   });
-  it('una corrida cancelada por stop() no marca el día como hecho', async () => {
-    runBuscador.mockImplementation((_now, s) => new Promise<void>((r) => s.addEventListener('abort', () => r())));
-    await orch.tick(MON_905);
-    orch.stop();
-    await orch.idleBuscador();
-    expect(await repo.kvGet(db, 'buscador_last_date')).toBeFalsy();
-  });
-  it('stop() aborta el signal pasado a runBuscador', async () => {
+  it('stop() aborta el signal pasado a runImportador', async () => {
     let signal!: AbortSignal;
-    runBuscador.mockImplementation((_now, s) => { signal = s; return new Promise<void>((r) => s.addEventListener('abort', () => r())); });
+    runImportador.mockImplementation((_now, s) => { signal = s; return new Promise<void>((r) => s.addEventListener('abort', () => r())); });
     await orch.tick(MON_905);
     expect(signal.aborted).toBe(false);
     orch.stop();
     expect(signal.aborted).toBe(true);
-    await orch.idleBuscador();
-  });
-  it('forceBuscadorToday: el mismo día vuelve a correr en el próximo tick', async () => {
-    await tickWait(MON_905);
-    await forceBuscadorToday(db);
-    await tickWait(plus(MON_905, MIN));
-    expect(runBuscador).toHaveBeenCalledTimes(2);
-  });
-  it('buscador: no corre antes de la hora de búsqueda', async () => {
-    await orch.tick(new Date('2026-11-09T11:30:00Z')); // 08:30 local
-    expect(runBuscador).not.toHaveBeenCalled();
+    await orch.idleImportador();
   });
 
   it('análisis semanal: lunes, una vez por semana', async () => {
@@ -212,22 +192,22 @@ describe('tick', () => {
   });
 
   it('un paso que lanza no frena los demás (flush corre) y se loguea', async () => {
-    runBuscador.mockRejectedValue(new Error('boom'));
+    runImportador.mockRejectedValue(new Error('boom'));
     const flush = vi.spyOn(gw, 'flushOutbox');
     await tickWait(MON_905);
     expect(flush).toHaveBeenCalledTimes(1);
     expect(runWeeklyAnalysis).toHaveBeenCalledTimes(1);
     const ev = (await repo.listEvents(db, 10)).find((e) => e.type === 'error');
-    expect(ev?.payload).toMatchObject({ paso: 'buscador', mensaje: 'boom' });
+    expect(ev?.payload).toMatchObject({ paso: 'importar', mensaje: 'boom' });
   });
 
   it('3 fallos seguidos del mismo paso -> un solo aviso; se rearma tras recuperarse', async () => {
-    runBuscador.mockRejectedValue(new Error('boom'));
+    runImportador.mockRejectedValue(new Error('boom'));
     for (let i = 0; i < 4; i++) await tickWait(plus(MON_905, i * 31 * MIN));
-    expect(await selfMsgs()).toEqual(['⚠️ El paso buscador falló 3 veces seguidas: boom']);
-    runBuscador.mockResolvedValue({});
+    expect(await selfMsgs()).toEqual(['⚠️ El paso importar falló 3 veces seguidas: boom']);
+    runImportador.mockResolvedValue({});
     await tickWait(plus(MON_905, 5 * 31 * MIN)); // recupera
-    runBuscador.mockRejectedValue(new Error('otra'));
+    runImportador.mockRejectedValue(new Error('otra'));
     await tickWait(new Date('2026-11-10T12:00:00Z'));
     await tickWait(new Date('2026-11-10T12:31:00Z'));
     await tickWait(new Date('2026-11-10T13:02:00Z'));
@@ -269,12 +249,12 @@ describe('tick', () => {
     expect((await selfMsgs()).filter((b) => b.includes('reintentos'))).toHaveLength(1);
   });
 
-  it('buscador que falla de forma permanente se reintenta como mucho cada 30 min', async () => {
-    runBuscador.mockRejectedValue(new Error('boom'));
+  it('importar que falla de forma permanente se reintenta como mucho cada 30 min', async () => {
+    runImportador.mockRejectedValue(new Error('boom'));
     for (let i = 0; i < 10; i++) await tickWait(plus(MON_905, i * MIN));
-    expect(runBuscador).toHaveBeenCalledTimes(1);
+    expect(runImportador).toHaveBeenCalledTimes(1);
     await tickWait(plus(MON_905, 31 * MIN));
-    expect(runBuscador).toHaveBeenCalledTimes(2);
+    expect(runImportador).toHaveBeenCalledTimes(2);
   });
 
   it('idle(): resuelve recién cuando termina el tick en curso, aunque otro tick se solape', async () => {
@@ -351,7 +331,7 @@ describe('recuperación de entrantes sin responder (debounce tras reinicio)', ()
     await repo.addMessage(db, { prospectId: p.id, direction: 'in', author: 'prospect', body: 'hola?', waMessageId: 'in-x' });
     return p;
   };
-  const fresh = () => createOrchestrator({ db, config, gateway: gw, vendedor: vendedor as any, runBuscador, runWeeklyAnalysis });
+  const fresh = () => createOrchestrator({ db, config, gateway: gw, vendedor: vendedor as any, runImportador, runWeeklyAnalysis });
 
   it('un orquestador nuevo responde un entrante que quedó sin atender, y una sola vez', async () => {
     const p = await unanswered();

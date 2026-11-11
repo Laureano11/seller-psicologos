@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Corre el Buscador cada hora en tu Mac. Instalación (una sola vez), desde la raíz del repo:
+    sed "s#__REPO__#$(pwd)#g; s#__PATH__#$PATH#g" scripts/buscador.launchd.plist > ~/Library/LaunchAgents/com.seller-psicologos.buscador.plist
+    launchctl load ~/Library/LaunchAgents/com.seller-psicologos.buscador.plist
+  Para frenarlo:
+    launchctl unload ~/Library/LaunchAgents/com.seller-psicologos.buscador.plist
+  El log queda en data/buscador.log.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.seller-psicologos.buscador</string>
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>npm run buscador</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>3600</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__REPO__/data/buscador.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/data/buscador.log</string>
+</dict>
+</plist>

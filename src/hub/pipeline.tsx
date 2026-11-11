@@ -1,7 +1,10 @@
 import { DateTime } from 'luxon';
 import type { Db } from '../db/db.js';
 import type { Config } from '../config.js';
+import { join } from 'node:path';
 import { CITIES } from '../agents/buscador/cities.js';
+import { CORRIDAS_FILE, ESTADO_FILE, PROSPECTOS_FILE, readJson, type Psicologo } from '../agents/buscador/archivo.js';
+import type { CorridaResult } from '../agents/buscador/corrida.js';
 import {
   countContactedSince, countOutboxByStatus, countProspectsByStatus, kvGet, listEvents, listFaq, listManualVersions,
   listOpenEscalations, listPendingOutbox, listProposals, listRecentMessages, listUpcomingMeetings, listVariants,
@@ -38,6 +41,20 @@ export interface AgentInfo {
 
 export interface ManualInfo { kind: ManualKind; chars: number; createdAt: Date | null }
 
+/** Lo que el Buscador dejó en data/prospectos.json, cruzado con la base. */
+export interface BuscadorArchivo {
+  total: number;
+  enBase: number;
+  pendientes: number;
+  descartados: Record<string, number>;
+  /** Los últimos 20, más nuevos primero. */
+  ultimos: (Psicologo & { estado: string })[];
+  ultimaCorrida: CorridaResult | null;
+}
+
+/** Cuántos psicólogos del .json se listan en el hub. */
+const ULTIMOS = 20;
+
 export interface PipelineData {
   now: Date;
   statusCounts: Record<string, number>;
@@ -55,7 +72,8 @@ export interface PipelineData {
   faqCount: number;
   variantActiva: string | null;
   variantCandidata: string | null;
-  buscador: AgentInfo & { lastRun: { found?: number; inserted?: number; skipped?: Record<string, number>; at?: string } | null };
+  buscador: AgentInfo & { lastRun: { revisados?: number; cargados?: number; descartes?: Record<string, number>; at?: string } | null };
+  buscadorArchivo: BuscadorArchivo;
   vendedor: AgentInfo;
   agenda: AgentInfo;
   orquestador: AgentInfo;
@@ -85,7 +103,7 @@ export async function loadPipelineData(db: Db, config: Config, now: Date): Promi
     if (!a) continue;
     agents[a].lastEvent ??= e;
     if (isErrorEvent(e.type) && new Date(e.createdAt).getTime() >= dayAgo) agents[a].errors.push(e);
-    if (e.type === 'buscador_run') lastRunEvent ??= e;
+    if (e.type === 'buscador_import') lastRunEvent ??= e;
   }
 
   const manuals: ManualInfo[] = [];
@@ -93,8 +111,10 @@ export async function loadPipelineData(db: Db, config: Config, now: Date): Promi
     const v = (await listManualVersions(db, kind)).find((x) => x.active);
     manuals.push({ kind, chars: v?.content.length ?? 0, createdAt: v?.createdAt ?? null });
   }
-  const cursor = await kvGet<number>(db, 'buscador_cursor');
-  const city = CITIES[typeof cursor === 'number' ? cursor : 0];
+  const dataDir = config.dataDir ?? 'data';
+  const estado = readJson<{ ciudad?: unknown }>(join(dataDir, ESTADO_FILE), {});
+  const city = CITIES[typeof estado.ciudad === 'number' ? estado.ciudad : 0];
+  const buscadorArchivo = await loadBuscadorArchivo(db, dataDir);
   const wa = await kvGet<{ state: string }>(db, 'wa_status');
 
   return {
@@ -115,6 +135,7 @@ export async function loadPipelineData(db: Db, config: Config, now: Date): Promi
     variantActiva: (await listVariants(db, 'activa'))[0]?.template ?? null,
     variantCandidata: (await listVariants(db, 'candidata'))[0]?.template ?? null,
     buscador: { ...agents.buscador, lastRun: lastRunEvent?.payload ?? null },
+    buscadorArchivo,
     vendedor: agents.vendedor,
     agenda: agents.agenda,
     orquestador: agents.orquestador,
@@ -122,6 +143,31 @@ export async function loadPipelineData(db: Db, config: Config, now: Date): Promi
     messages: await listRecentMessages(db, 50),
     outboxPendiente: await listPendingOutbox(db, 20),
     events: allEvents.slice(0, 30),
+  };
+}
+
+async function loadBuscadorArchivo(db: Db, dataDir: string): Promise<BuscadorArchivo> {
+  const raw = readJson<unknown>(join(dataDir, PROSPECTOS_FILE), []);
+  const lista = (Array.isArray(raw) ? raw : []).filter((p): p is Psicologo => Boolean(p) && typeof p.waId === 'string');
+  const enDb = new Set((await db.query<{ wa_id: string }>('SELECT wa_id FROM prospects WHERE wa_id IS NOT NULL')).map((r) => r.wa_id));
+  const desc = (await kvGet<Record<string, string>>(db, 'importador_descartados')) ?? {};
+  const descartados: Record<string, number> = {};
+  let enBase = 0;
+  const conEstado = lista.map((p) => {
+    if (enDb.has(p.waId)) { enBase++; return { ...p, estado: 'en la base' }; }
+    const why = desc[p.waId];
+    if (why) { descartados[why] = (descartados[why] ?? 0) + 1; return { ...p, estado: `descartado (${why})` }; }
+    return { ...p, estado: 'pendiente' };
+  });
+  const nDesc = Object.values(descartados).reduce((a, b) => a + b, 0);
+  const corridas = readJson<unknown>(join(dataDir, CORRIDAS_FILE), []);
+  return {
+    total: lista.length,
+    enBase,
+    pendientes: lista.length - enBase - nDesc,
+    descartados,
+    ultimos: conEstado.slice(-ULTIMOS).reverse(),
+    ultimaCorrida: Array.isArray(corridas) && corridas.length ? (corridas[corridas.length - 1] as CorridaResult) : null,
   };
 }
 
@@ -200,6 +246,8 @@ export function PipelineView({ d, config, fmt }: { d: PipelineData; config: Conf
   const max = Math.max(1, ...Object.values(d.statusCounts));
   const manualTxt = d.manuals.map((m) => `${m.kind}: ${m.chars} car.${m.createdAt ? ` (${fmt(m.createdAt)})` : ''}`).join(' · ');
   const run = d.buscador.lastRun;
+  const ba = d.buscadorArchivo;
+  const corrida = ba.ultimaCorrida;
   const funnel = (s: Status, side = false) => (
     <div class={side ? 'fun side' : 'fun'}>
       <span>{STATUS_LABELS[s]}</span>
@@ -215,8 +263,9 @@ export function PipelineView({ d, config, fmt }: { d: PipelineData; config: Conf
         <div class="frame-body">
         <h3>Flujo</h3>
         <div class="flow">
-          <Node title="Fuentes" n="Google Places, sitios web" cls="ext" /><Arrow />
-          <Node title={`Buscador (${config.searchHour}:00)`} /><Arrow />
+          <Node title="Web (navegador)" n="buscador web y sitios de psicólogos" cls="ext" /><Arrow />
+          <Node title="Buscador (Claude en la Mac, cada hora)" n={`${ba.total} en prospectos.json`} /><Arrow />
+          <Node title="Importador (worker, cada 10 min)" n={`${ba.pendientes} pendientes`} /><Arrow />
           <Node title="Base de prospectos" n={`${d.totalProspects} encontrados`} /><Arrow />
           <Node title={`Orquestador (cada minuto, máx ${config.dailyNewContacts}/día)`} n={`${d.contactsToday} contactos hoy`} /><Arrow />
           <Node title="Vendedor" /><Arrow />
@@ -243,10 +292,15 @@ export function PipelineView({ d, config, fmt }: { d: PipelineData; config: Conf
       </div>
 
       <div class="agents">
-        <Agent name="Buscador" does="Busca psicólogos en Google Places y sus sitios web y los carga como prospectos." when={`todos los días a las ${config.searchHour}:00`}
-          models={config.llm.buscador} a={d.buscador} fmt={fmt}
-          info={[`Ciudad actual (cursor): ${d.cursorCity}`, `Fuentes: sitios web${config.googlePlacesKey ? ', Google Places' : ''}`]}
-          extra={run ? `found ${run.found ?? 0}, inserted ${run.inserted ?? 0}, skipped ${oneLine(run.skipped)}` : undefined} />
+        <Agent name="Buscador" does="Un agente de Claude busca psicólogos con el navegador desde la Mac y los guarda en data/prospectos.json. El worker los pasa a la base (WhatsApp, No Llame y bajas) cada 10 minutos."
+          when="cada hora en la Mac (o a mano con npm run buscador); importación cada 10 min"
+          models={['claude -p (sonnet) + navegador']} a={d.buscador} fmt={fmt}
+          info={[
+            `Próxima ciudad: ${d.cursorCity}`,
+            `prospectos.json: ${ba.total} (en la base ${ba.enBase}, pendientes ${ba.pendientes}, descartados ${oneLine(ba.descartados)})`,
+            corrida ? `Última corrida (${fmt(new Date(corrida.at))}): ${corrida.ciudad}, trajo ${corrida.hallados}, guardó ${corrida.guardados}` : 'Todavía no hubo corridas',
+          ]}
+          extra={run ? `revisados ${run.revisados ?? 0}, cargados ${run.cargados ?? 0}, descartes ${oneLine(run.descartes)}` : undefined} />
         <Agent name="Vendedor" does="Conversa con los psicólogos por WhatsApp, responde dudas y escala lo que no sabe." when="al contactar y al responder cada prospecto (espera 30 s)"
           models={config.llm.vendedor} a={d.vendedor} fmt={fmt}
           info={[`Manuales activos — ${manualTxt}`, `FAQ: ${d.faqCount}`, `Apertura activa: ${d.variantActiva ? cut(d.variantActiva, 80) : '—'}`, `Apertura candidata: ${d.variantCandidata ? cut(d.variantCandidata, 80) : '—'}`]} />
@@ -258,6 +312,28 @@ export function PipelineView({ d, config, fmt }: { d: PipelineData; config: Conf
         <Agent name="Analista" does="Compara aperturas y propone mejoras que Lauri aprueba." when="lunes a las 8:00"
           models={config.llm.analista} a={d.analista} fmt={fmt}
           info={[`Umbral A/B: ${config.abMinPerVariant} contactos por variante`, `Contactos desde la última propuesta: ${d.contactsSinceProposal}`]} />
+      </div>
+
+      <div class="card scroll">
+        <h3>Psicólogos encontrados (data/prospectos.json, últimos {ULTIMOS})</h3>
+        {ba.ultimos.length === 0 ? <div>El Buscador todavía no encontró a nadie. Corré <span class="mono">npm run buscador</span> en la Mac.</div> : (
+          <table>
+            <thead><tr><th>Encontrado</th><th>Nombre</th><th>Celular</th><th>Email</th><th>Ciudad</th><th>Página</th><th>Estado</th></tr></thead>
+            <tbody>
+              {ba.ultimos.map((p) => (
+                <tr>
+                  <td class="t">{fmt(new Date(p.encontradoEl))}</td>
+                  <td>{p.nombre}</td>
+                  <td class="mono">{p.celular}</td>
+                  <td>{p.email ?? '—'}</td>
+                  <td>{p.ciudad}</td>
+                  <td>{/^https?:\/\//i.test(p.pagina) ? <a href={p.pagina} target="_blank" rel="noopener noreferrer">{cut(p.pagina, 40)}</a> : cut(String(p.pagina), 40)}</td>
+                  <td>{p.estado}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       <div class="card">

@@ -15,8 +15,8 @@ export interface OrchestratorDeps {
   config: Config;
   gateway: Pick<WaGateway, 'handleIncoming' | 'enqueueToOwner' | 'flushOutbox'>;
   vendedor: Pick<ReturnType<typeof createVendedor>, 'handleInbound' | 'startConversation' | 'runFollowups'>;
-  /** Corre en segundo plano; `signal` se aborta con stop() (apagado del worker). */
-  runBuscador: (now: Date, signal: AbortSignal) => Promise<unknown>;
+  /** Pasa los psicólogos de data/prospectos.json a la base. Corre en segundo plano; `signal` se aborta con stop(). */
+  runImportador: (now: Date, signal: AbortSignal) => Promise<unknown>;
   runWeeklyAnalysis: (now: Date) => Promise<unknown>;
 }
 
@@ -27,6 +27,7 @@ const MAX_RETRIES_PER_TICK = 5;
 const BRAKE_BAJAS = 3;
 const FAIL_STREAK_ALERT = 3;
 const RETRY_FAILED_MS = 30 * MIN;
+const IMPORT_EVERY_MS = 10 * MIN;
 
 export function createOrchestrator(deps: OrchestratorDeps) {
   const { db, config, gateway, vendedor } = deps;
@@ -39,8 +40,9 @@ export function createOrchestrator(deps: OrchestratorDeps) {
   let inFlight: Promise<void> = Promise.resolve();
   let waDownSince: Date | null = null;
   let waDownLogged = false;
-  let buscadorRun: Promise<void> | null = null;
-  let buscadorAbort: AbortController | null = null;
+  let importRun: Promise<void> | null = null;
+  let importAbort: AbortController | null = null;
+  let lastImportAt: Date | null = null;
   let lastTickAt: Date | null = null; // hora del último tick: aproxima cuándo falló una tarea en segundo plano
 
   const local = (now: Date) => DateTime.fromJSDate(now, { zone: config.tz });
@@ -137,34 +139,33 @@ export function createOrchestrator(deps: OrchestratorDeps) {
     }
   }
 
-  /** Lanza la corrida del Buscador sin esperarla (puede durar más de una hora). */
-  function startBuscador(now: Date, today: string): void {
+  /** Lanza la importación sin esperarla (las pausas antes de cada consulta a WhatsApp la hacen lenta). */
+  function startImportador(now: Date): void {
     const ac = new AbortController();
-    buscadorAbort = ac;
-    buscadorRun = (async () => {
+    importAbort = ac;
+    lastImportAt = now;
+    importRun = (async () => {
       try {
-        await deps.runBuscador(now, ac.signal);
-        // cancelada al apagar: no cuenta como hecha, se retoma al reiniciar (el tope diario de WhatsApp persiste)
-        if (!ac.signal.aborted) await kvSet(db, 'buscador_last_date', today);
-        recordSuccess('buscador');
+        await deps.runImportador(now, ac.signal);
+        recordSuccess('importar');
       } catch (e) {
-        // el backoff cuenta desde la falla (último tick), no desde el inicio de la corrida
-        await recordFailure('buscador', e, lastTickAt ?? now);
+        // el backoff cuenta desde la falla (último tick), no desde el inicio
+        await recordFailure('importar', e, lastTickAt ?? now);
       } finally {
-        buscadorRun = null;
-        buscadorAbort = null;
+        importRun = null;
+        importAbort = null;
       }
     })();
   }
 
-  /** Aborta la corrida del Buscador en curso (apagado). */
+  /** Aborta la importación en curso (apagado). */
   function stop(): void {
-    buscadorAbort?.abort();
+    importAbort?.abort();
   }
 
-  /** Resuelve cuando termina la corrida del Buscador en curso (si hay). */
-  async function idleBuscador(): Promise<void> {
-    await buscadorRun;
+  /** Resuelve cuando termina la importación en curso (si hay). */
+  async function idleImportador(): Promise<void> {
+    await importRun;
   }
 
   function tick(now: Date): Promise<void> {
@@ -188,10 +189,10 @@ export function createOrchestrator(deps: OrchestratorDeps) {
       await step('recuperar', () => recoverUnanswered(now));
       await step('responder', () => runDue(now));
 
-      await step('buscador', async () => {
-        if (buscadorRun) return;
-        if (dt.hour < config.searchHour || (await kvGet<string>(db, 'buscador_last_date')) === today) return;
-        startBuscador(now, today);
+      await step('importar', async () => {
+        if (importRun) return;
+        if (lastImportAt && now.getTime() - lastImportAt.getTime() < IMPORT_EVERY_MS) return;
+        startImportador(now);
       }, { now, backoff: true, deferred: true });
 
       // El freno se evalúa antes de iniciar contactos para que el mismo tick ya respete la pausa.
@@ -271,7 +272,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
     }
   }
 
-  return { onIncoming, runDue, tick, idle, onWaStatus, stop, idleBuscador };
+  return { onIncoming, runDue, tick, idle, onWaStatus, stop, idleImportador };
 }
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));

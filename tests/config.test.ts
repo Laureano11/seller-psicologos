@@ -7,7 +7,6 @@ describe('loadConfig', () => {
   it('defaults', () => {
     const c = loadConfig(base);
     expect(c.dailyNewContacts).toBe(5);
-    expect(c.searchHour).toBe(9);
     expect(c.tz).toBe('America/Argentina/Buenos_Aires');
     expect(c.sendWindow.days).toEqual([1, 2, 3, 4, 5]);
     expect(c.meetingWindow.start).toBe('10:00');
@@ -38,7 +37,7 @@ describe('loadConfig', () => {
       GOOGLE_REFRESH_TOKEN: 'r',
     });
     expect(c.llm.vendedor).toEqual(['google:a', 'groq:b']);
-    expect(c.llm.buscador).toEqual([]);
+    expect(c.llm.analista).toEqual([]);
     expect(c.google).toEqual({ clientId: 'i', clientSecret: 's', refreshToken: 'r', calendarId: 'primary' });
   });
   it('rechaza contraseña del hub débil o de ejemplo', () => {
@@ -61,23 +60,12 @@ describe('loadConfig', () => {
 });
 
 describe('loadConfig: buscador', () => {
-  it('buscador: defaults', () => {
-    expect(loadConfig(base).buscador).toEqual({
-      maxSearches: 25, maxPages: 150, resultsPerQuery: 10, maxWaChecks: 150,
-      searchDelayMs: [20000, 60000], pageDelayMs: [3000, 8000], engine: 'bing', profileDir: 'browser_profile',
-    });
+  it('buscador: solo queda el tope de WhatsApp; datos en data/', () => {
+    expect(loadConfig(base).buscador).toEqual({ maxWaChecks: 150 });
+    expect(loadConfig({ ...base, BUSCADOR_MAX_WA_CHECKS: '20' }).buscador.maxWaChecks).toBe(20);
+    expect(loadConfig(base).dataDir).toBe('data');
   });
-  it('buscador: rango "5-10" -> [5000, 10000]', () => {
-    expect(loadConfig({ ...base, BUSCADOR_SEARCH_DELAY: '5-10' }).buscador.searchDelayMs).toEqual([5000, 10000]);
-    expect(loadConfig({ ...base, BUSCADOR_PAGE_DELAY: ' 0-2 ' }).buscador.pageDelayMs).toEqual([0, 2000]);
-  });
-  it('buscador: rango inválido lanza nombrando la variable', () => {
-    expect(() => loadConfig({ ...base, BUSCADOR_SEARCH_DELAY: '10-5' })).toThrow(/BUSCADOR_SEARCH_DELAY/);
-    expect(() => loadConfig({ ...base, BUSCADOR_PAGE_DELAY: 'abc' })).toThrow(/BUSCADOR_PAGE_DELAY/);
-  });
-  it('buscador: BUSCADOR_ENGINE inválido lanza', () => {
-    expect(() => loadConfig({ ...base, BUSCADOR_ENGINE: 'yahoo' })).toThrow(/BUSCADOR_ENGINE/);
-    expect(loadConfig({ ...base, BUSCADOR_ENGINE: 'google' }).buscador.engine).toBe('google');
-    expect(loadConfig({ ...base, BUSCADOR_ENGINE: 'duckduckgo' }).buscador.engine).toBe('duckduckgo');
+  it('ya no pide claves ni motor para el buscador', () => {
+    expect(() => loadConfig({ ...base, BUSCADOR_ENGINE: 'yahoo', GOOGLE_PLACES_KEY: '' })).not.toThrow();
   });
 });

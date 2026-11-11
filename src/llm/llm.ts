@@ -8,7 +8,7 @@ import type { Config } from '../config.js';
 import type { Db } from '../db/db.js';
 import { logEvent } from '../db/repo.js';
 
-export type AgentName = 'buscador' | 'vendedor' | 'analista';
+export type AgentName = 'vendedor' | 'analista';
 export type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
 export interface Llm {

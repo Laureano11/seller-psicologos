@@ -7,18 +7,12 @@ export type Config = {
   sendWindow: Window;
   meetingWindow: Window;
   meetingMinutes: number;
-  searchHour: number;
-  buscadorMaxPerDay: number;
   buscador: {
-    maxSearches: number;
-    maxPages: number;
-    resultsPerQuery: number;
+    /** Consultas "¿tiene WhatsApp?" por día al importar (protege el número). */
     maxWaChecks: number;
-    searchDelayMs: [number, number];
-    pageDelayMs: [number, number];
-    engine: 'bing' | 'google' | 'duckduckgo';
-    profileDir: string;
   };
+  /** Carpeta de data/prospectos.json y bajas.json. */
+  dataDir: string;
   followupDays: number;
   closeAfterDays: number;
   maxFollowups: number;
@@ -27,8 +21,7 @@ export type Config = {
   ownerName: string;
   dncMode: 'file' | 'off';
   dncFile?: string;
-  llm: { buscador: string[]; vendedor: string[]; analista: string[] };
-  googlePlacesKey?: string;
+  llm: { vendedor: string[]; analista: string[] };
   google?: { clientId: string; clientSecret: string; refreshToken: string; calendarId: string };
   hubUser: string;
   hubPassword: string;
@@ -54,22 +47,6 @@ export function loadConfig(env: Env): Config {
     if (!Number.isFinite(n)) throw new Error(`${k} debe ser numérico (recibido "${v}")`);
     return n;
   };
-
-  /** Rango en segundos "a-b" -> [ms, ms], con 0 <= a <= b. */
-  const range = (k: string, def: [number, number]): [number, number] => {
-    const v = env[k]?.trim();
-    if (!v) return [def[0] * 1000, def[1] * 1000];
-    const m = /^(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)$/.exec(v);
-    const a = m ? Number(m[1]) : NaN;
-    const b = m ? Number(m[2]) : NaN;
-    if (!m || a > b) throw new Error(`${k} debe ser un rango en segundos "min-max" (recibido "${v}")`);
-    return [a * 1000, b * 1000];
-  };
-
-  const engine = env.BUSCADOR_ENGINE?.trim() || 'bing';
-  if (engine !== 'bing' && engine !== 'google' && engine !== 'duckduckgo') {
-    throw new Error(`BUSCADOR_ENGINE debe ser "bing", "google" o "duckduckgo" (recibido "${engine}")`);
-  }
 
   const dncMode = (env.DNC_MODE?.trim() || 'file') as string;
   if (dncMode !== 'file' && dncMode !== 'off') throw new Error(`DNC_MODE debe ser "file" u "off" (recibido "${dncMode}")`);
@@ -103,18 +80,10 @@ export function loadConfig(env: Env): Config {
     sendWindow: parseWindow(env.SEND_WINDOW?.trim() || 'mon-fri 09:00-20:00'),
     meetingWindow: parseWindow(env.MEETING_WINDOW?.trim() || 'mon-fri 10:00-18:00'),
     meetingMinutes: num('MEETING_MINUTES', 30),
-    searchHour: num('SEARCH_HOUR', 9),
-    buscadorMaxPerDay: num('BUSCADOR_MAX_PER_DAY', 50),
     buscador: {
-      maxSearches: num('BUSCADOR_MAX_SEARCHES', 25),
-      maxPages: num('BUSCADOR_MAX_PAGES', 150),
-      resultsPerQuery: num('BUSCADOR_RESULTS_PER_QUERY', 10),
       maxWaChecks: num('BUSCADOR_MAX_WA_CHECKS', 150),
-      searchDelayMs: range('BUSCADOR_SEARCH_DELAY', [20, 60]),
-      pageDelayMs: range('BUSCADOR_PAGE_DELAY', [3, 8]),
-      engine,
-      profileDir: env.BUSCADOR_PROFILE_DIR?.trim() || 'browser_profile',
     },
+    dataDir: env.DATA_DIR?.trim() || 'data',
     followupDays: num('FOLLOWUP_DAYS', 3),
     closeAfterDays: num('CLOSE_AFTER_DAYS', 4),
     maxFollowups: num('MAX_FOLLOWUPS', 1),
@@ -123,8 +92,7 @@ export function loadConfig(env: Env): Config {
     ownerName: env.OWNER_NAME?.trim() || 'Lauri',
     dncMode,
     dncFile,
-    llm: { buscador: list(env.LLM_BUSCADOR), vendedor: list(env.LLM_VENDEDOR), analista: list(env.LLM_ANALISTA) },
-    googlePlacesKey: env.GOOGLE_PLACES_KEY?.trim() || undefined,
+    llm: { vendedor: list(env.LLM_VENDEDOR), analista: list(env.LLM_ANALISTA) },
     google,
     hubUser: env.HUB_USER?.trim() || 'admin',
     hubPassword,

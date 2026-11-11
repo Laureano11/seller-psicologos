@@ -4,12 +4,16 @@ import * as repo from '../src/db/repo.js';
 import { createHubApp } from '../src/hub/app.js';
 import { loadPipelineData } from '../src/hub/pipeline.js';
 import type { Config } from '../src/config.js';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { writeJsonAtomic } from '../src/agents/buscador/archivo.js';
 
 const config = {
   hubUser: 'lauri', hubPassword: 'secreto', dncMode: 'file', abMinPerVariant: 30, tz: 'America/Argentina/Buenos_Aires',
-  dailyNewContacts: 5, replyDebounceSeconds: 30, searchHour: 9,
+  dailyNewContacts: 5, replyDebounceSeconds: 30, dataDir: mkdtempSync(join(tmpdir(), 'pipe-data-')),
   sendWindow: { days: [1, 2, 3, 4, 5], start: '09:00', end: '20:00' },
-  llm: { buscador: ['google:gemini-2.5-flash'], vendedor: ['google:gemini-2.5-flash', 'groq:llama-3.3-70b-versatile'], analista: [] },
+  llm: { vendedor: ['google:gemini-2.5-flash', 'groq:llama-3.3-70b-versatile'], analista: [] },
 } as unknown as Config;
 const auth = { Authorization: 'Basic ' + Buffer.from('lauri:secreto').toString('base64') };
 let db: Db;
@@ -74,11 +78,32 @@ describe('pipeline', () => {
     expect(d.messages[0]!.outboxStatus).toBe('enviado');
   });
 
-  it('loadPipelineData expone buscador_run', async () => {
-    await repo.logEvent(db, 'buscador_run', { found: 7, inserted: 4, skipped: { duplicado: 3 } });
-    await repo.logEvent(db, 'buscador_source_error', { error: 'x' });
+  it('loadPipelineData expone la última importación y los errores del buscador', async () => {
+    await repo.logEvent(db, 'buscador_import', { revisados: 7, cargados: 4, descartes: { no_llame: 3 } });
+    await repo.logEvent(db, 'buscador_import_error', { error: 'x' });
     const d = await loadPipelineData(db, config, new Date());
-    expect(d.buscador.lastRun).toMatchObject({ found: 7, inserted: 4 });
+    expect(d.buscador.lastRun).toMatchObject({ revisados: 7, cargados: 4 });
     expect(d.buscador.errors).toHaveLength(1);
+  });
+
+  it('muestra data/prospectos.json con el estado de cada psicólogo', async () => {
+    const ps = (nombre: string, waId: string) => ({
+      nombre, celular: waId.slice(3), waId, ciudad: 'Córdoba', provincia: 'Córdoba', pagina: 'https://a.com', encontradoEl: '2026-11-11T14:00:00.000Z',
+    });
+    writeJsonAtomic(join(config.dataDir, 'prospectos.json'), [ps('Lic. Ana', '5493511111111'), ps('Lic. Bea', '5493512222222'), ps('Lic. Caro', '5493513333333')]);
+    writeJsonAtomic(join(config.dataDir, 'buscador-corridas.json'), [{ ciudad: 'Córdoba', hallados: 5, guardados: 3, descartes: {}, borradosPorBaja: 0, at: '2026-11-11T14:00:00.000Z' }]);
+    writeJsonAtomic(join(config.dataDir, 'buscador-estado.json'), { ciudad: 1 });
+    await repo.insertProspect(db, { name: 'Lic. Ana', waId: '5493511111111' });
+    await repo.kvSet(db, 'importador_descartados', { '5493512222222': 'no_llame' });
+    const d = await loadPipelineData(db, config, new Date());
+    expect(d.buscadorArchivo).toMatchObject({ total: 3, enBase: 1, pendientes: 1, descartados: { no_llame: 1 } });
+    expect(d.buscadorArchivo.ultimos.map((p) => [p.nombre, p.estado])).toEqual([
+      ['Lic. Caro', 'pendiente'], ['Lic. Bea', 'descartado (no_llame)'], ['Lic. Ana', 'en la base'],
+    ]);
+    expect(d.buscadorArchivo.ultimaCorrida).toMatchObject({ guardados: 3 });
+    expect(d.cursorCity).toBe('La Plata, Buenos Aires');
+    const html = await page();
+    expect(html).toContain('Lic. Caro');
+    expect(html).toContain('descartado (no_llame)');
   });
 });

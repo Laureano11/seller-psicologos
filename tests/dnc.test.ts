@@ -5,9 +5,6 @@ import { join } from 'node:path';
 import { createDncChecker, reportDncStatus } from '../src/dnc.js';
 import { createMemoryDb, migrate } from '../src/db/db.js';
 import * as repo from '../src/db/repo.js';
-import { runBuscador } from '../src/agents/buscador/run.js';
-import { createFakeLlm } from '../src/llm/llm.js';
-import { createFakeTransport } from '../src/whatsapp/transport.js';
 import { loadConfig } from '../src/config.js';
 
 const env = { DATABASE_URL: 'x', OWNER_WA_ID: '5491155551234', HUB_PASSWORD: 'una-clave-larga' };
@@ -29,7 +26,7 @@ describe('dnc', () => {
     const c = createDncChecker(loadConfig({ ...env, DNC_MODE: 'off' }));
     expect(await c.isBlocked('5491123456789')).toBe(false);
   });
-  it('archivo faltante: no lanza, bloquea todo, avisa (evento + kv) y el buscador no agrega nada', async () => {
+  it('archivo faltante: no lanza, bloquea todo, avisa (evento + kv) y se limpia al aparecer', async () => {
     const f = join(mkdtempSync(join(tmpdir(), 'dnc-')), 'no-existe.csv');
     const c = createDncChecker(loadConfig({ ...env, DNC_MODE: 'file', DNC_FILE: f }));
     expect(c.missingFile?.()).toBe(f);
@@ -40,19 +37,6 @@ describe('dnc', () => {
       expect(await reportDncStatus(db, c)).toBe(false);
       expect(await repo.kvGet(db, 'dnc_error')).toEqual({ archivo: f });
       expect((await repo.listEvents(db, 5)).map((e) => e.type)).toContain('dnc_archivo_faltante');
-      let searched = 0;
-      const wa = createFakeTransport();
-      wa.whatsappNumbers.add('5491111111111');
-      const r = await runBuscador({
-        db, dnc: c, wa, config: { buscadorMaxPerDay: 50, buscador: loadConfig({ DATABASE_URL: 'x', OWNER_WA_ID: '5491155551234', DNC_MODE: 'off' }).buscador },
-        engines: [], robots: { allowed: async () => true }, notifyOwner: async () => undefined, contentDir: 'content',
-        llm: createFakeLlm(() => { throw new Error('no debería llamarse'); }),
-        sources: [{ name: 'fake', search: async () => { searched++; return [{ name: 'X', phone: '11 1111-1111', city: 'CABA', province: 'CABA', source: 'fake', sourceRef: 'x' }]; } }],
-      }, new Date());
-      expect(r.inserted).toBe(0);
-      expect(r.skipped).toEqual({ no_llame_sin_archivo: 1 });
-      expect(searched).toBe(0);
-      expect(await db.query('SELECT 1 FROM prospects')).toHaveLength(0);
       // al aparecer el archivo, se limpia el error
       writeFileSync(f, '11 9999-0000\n');
       expect(await reportDncStatus(db, c)).toBe(true);
